@@ -84,13 +84,21 @@ function strList(v: unknown): string[] {
 export class MockQlooClient implements QlooClient {
   readonly mode = "mock" as const;
   readonly calls: { tool: QlooToolName; args: Record<string, unknown> }[] = [];
+  // Optional simulated latency (MOCK_LATENCY_MS) so the streamed agent log can be
+  // seen in demo mode; 0 in tests and CI.
+  private readonly latencyMs: number;
+
+  constructor(opts: { latencyMs?: number } = {}) {
+    this.latencyMs = Math.max(0, Math.min(opts.latencyMs ?? 0, 5000));
+  }
 
   async call(tool: QlooToolName, args: Record<string, unknown>): Promise<QlooEnvelope> {
     this.calls.push({ tool, args });
+    if (this.latencyMs > 0) await new Promise((r) => setTimeout(r, this.latencyMs * (0.6 + Math.random() * 0.8)));
     switch (tool) {
       case "qloo_describe": {
         const name = str(args.entity, "Unknown");
-        return envelope("describe", [{ entity_id: `mock-${hash(name).toString(16)}`, name, type: "urn:entity:artist", popularity: 0.97 }]);
+        return envelope("describe", [{ entity_id: `mock-${hash(name).toString(16)}`, name, type: `urn:entity:${str(args.type, "artist")}`, popularity: 0.97 }]);
       }
       case "qloo_recommend": {
         const signals = strList(args.signals);

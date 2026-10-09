@@ -1,11 +1,34 @@
 import type { QlooEnvelope, QlooMode, QlooToolName } from "../qloo/types.ts";
 
-export interface BriefInput {
+/**
+ * Two booking questions run on the same Qloo tools:
+ * - "opener": a headliner and a city -> who should open the show.
+ * - "venue":  a venue, its city and a free date -> whom the room should book.
+ */
+export type Scenario = "opener" | "venue";
+
+export interface OpenerInput {
+  scenario: "opener";
   headliner: string;
   city: string;
   dateFrom?: string; // YYYY-MM-DD, show window (informational)
   dateTo?: string;
   capacity?: number;
+}
+
+export interface VenueInput {
+  scenario: "venue";
+  venue: string;
+  city: string;
+  date?: string; // YYYY-MM-DD, the free date (informational: Qloo has no availability data)
+  capacity?: number;
+}
+
+export type BriefInput = OpenerInput | VenueInput;
+
+/** The entity every query in a brief is anchored on. */
+export function subjectOf(input: BriefInput): { name: string; type: "artist" | "place" } {
+  return input.scenario === "venue" ? { name: input.venue, type: "place" } : { name: input.headliner, type: "artist" };
 }
 
 export interface TraceStep {
@@ -21,6 +44,26 @@ export interface TraceStep {
   purpose?: string;
 }
 
+/** One LLM round trip: choosing the next tool calls, or writing the narrative. */
+export interface LlmCall {
+  phase: "plan" | "narrative";
+  status: "ok" | "error";
+  provider?: string;
+  durationMs: number;
+  summary: string;
+}
+
+/**
+ * Live agent events, streamed to the page over Server-Sent Events.
+ * `seq` orders Qloo and LLM calls on one timeline; a "start" is always
+ * followed by an "end" with the same seq.
+ */
+export type AgentEvent =
+  | { type: "start"; seq: number; kind: "qloo"; actor: TraceStep["actor"]; tool: QlooToolName; purpose?: string; args: Record<string, unknown> }
+  | { type: "end"; seq: number; kind: "qloo"; step: TraceStep }
+  | { type: "start"; seq: number; kind: "llm"; phase: LlmCall["phase"] }
+  | { type: "end"; seq: number; kind: "llm"; call: LlmCall };
+
 export interface EvidenceItem {
   tool: QlooToolName;
   args: Record<string, unknown>;
@@ -30,7 +73,7 @@ export interface EvidenceItem {
 
 export type Trend = "rising" | "flat" | "falling" | "unknown";
 
-export interface OpenerCandidate {
+export interface Candidate {
   name: string;
   entityId?: string;
   overlapScore: number; // 0-100, relative within this brief only
@@ -57,11 +100,15 @@ export interface Demographics {
 }
 
 export interface Brief {
+  /** Permalink id, set by the server when the brief is stored. */
+  id?: string;
   input: BriefInput;
   mode: QlooMode;
   agent: "llm" | "planner" | "hybrid";
-  headliner: { name: string; entityId?: string; trend: Trend };
-  openers: OpenerCandidate[];
+  subject: { name: string; entityId?: string; type: "artist" | "place"; trend: Trend };
+  candidates: Candidate[];
+  /** Whose fans the map shows: the headliner (opener) or the top candidate (venue). */
+  heatmapOf: string | null;
   heatmap: HeatPoint[];
   demographics: Demographics | null;
   partners: Partner[];
@@ -69,5 +116,6 @@ export interface Brief {
   narrative: string;
   caveats: string[];
   trace: TraceStep[];
+  llmCalls: LlmCall[];
   generatedAt: string;
 }

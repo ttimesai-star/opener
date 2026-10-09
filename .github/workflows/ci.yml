@@ -24,5 +24,10 @@ jobs:
         run: |
           docker run -d --name opener -p 7860:7860 -e QLOO_MODE=mock opener
           for i in $(seq 1 30); do curl -sf localhost:7860/api/health && break; sleep 1; done
-          curl -sf -X POST localhost:7860/api/brief -H 'content-type: application/json' -d '{"headliner":"CI Band","city":"Berlin"}' | grep -q '"openers"'
+          curl -sf -X POST localhost:7860/api/brief -H 'content-type: application/json' -d '{"headliner":"CI Band","city":"Berlin"}' | grep -q '"candidates"'
+          curl -sfN -X POST localhost:7860/api/brief/stream -H 'content-type: application/json' -d '{"scenario":"venue","venue":"CI Hall","city":"Berlin"}' > stream.txt
+          grep -q '^event: step' stream.txt && grep -q '^event: brief' stream.txt
+          id=$(grep '^data: ' stream.txt | tail -1 | cut -c7- | jq -r .id)
+          test -n "$id" && test "$id" != null
+          curl -sf "localhost:7860/api/briefs/$id.md" | grep -q '^# Booking brief: CI Hall'
           curl -sf localhost:7860/ | grep -q '<div id="root">'

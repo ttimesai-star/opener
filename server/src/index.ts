@@ -8,7 +8,14 @@ const staticDir = process.env.STATIC_DIR ?? fileURLToPath(new URL("../../web/dis
 
 const qloo = await createQlooClient();
 const llm = createLlm();
-const server = createApp({ qloo, llm, staticDir, allowedOrigin: process.env.ALLOWED_ORIGIN, trustProxy: process.env.TRUST_PROXY === "1" });
+const ttlHours = Number(process.env.BRIEF_TTL_HOURS);
+const server = createApp({
+  qloo, llm, staticDir,
+  allowedOrigin: process.env.ALLOWED_ORIGIN,
+  trustProxy: process.env.TRUST_PROXY === "1",
+  // Shared-brief links live in server memory only; a restart or the TTL ends them.
+  briefTtlMs: ttlHours > 0 ? Math.min(ttlHours, 168) * 3600_000 : undefined,
+});
 
 server.listen(port, () => {
   console.log(`opener listening on :${port} (qloo=${qloo.mode}, llm=${llm ? "on" : "off -> scripted planner"})`);

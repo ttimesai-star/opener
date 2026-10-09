@@ -1,49 +1,99 @@
-import { useEffect, useState, type FormEvent } from "react";
-import { getHealth, requestBrief, type Brief, type Health } from "./api.ts";
-import { AgentLog } from "./components/AgentLog.tsx";
+import { useEffect, useRef, useState, type FormEvent } from "react";
+import { getBrief, getHealth, markdownUrl, streamBrief, type Health, type StoredBrief } from "./api.ts";
+import { AgentLog, applyEvent, timelineFromBrief, type TimelineItem } from "./components/AgentLog.tsx";
 import { Demographics } from "./components/Demographics.tsx";
 import { FanMap } from "./components/FanMap.tsx";
 import { Openers } from "./components/Openers.tsx";
 
+type Scenario = "opener" | "venue";
+
+const PERMALINK = /^\/b\/([A-Za-z0-9_-]{12})\/?$/;
+
+function briefTitle(b: StoredBrief): string {
+  return b.input.scenario === "venue"
+    ? `${b.subject.name}, ${b.input.city}${b.input.date ? ` · ${b.input.date}` : ""}: whom to book`
+    : `Openers for ${b.subject.name} in ${b.input.city}`;
+}
+
 export function App() {
   const [health, setHealth] = useState<Health | null>(null);
-  const [brief, setBrief] = useState<Brief | null>(null);
+  const [scenario, setScenario] = useState<Scenario>("opener");
+  const [brief, setBrief] = useState<StoredBrief | null>(null);
+  const [timeline, setTimeline] = useState<TimelineItem[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const abort = useRef<AbortController | null>(null);
 
   useEffect(() => {
     void getHealth().then(setHealth);
+    const open = () => {
+      const id = PERMALINK.exec(window.location.pathname)?.[1];
+      if (!id) return;
+      getBrief(id)
+        .then((b) => {
+          setBrief(b);
+          setScenario(b.input.scenario);
+          setTimeline(timelineFromBrief(b));
+          setError(null);
+        })
+        .catch((err: Error) => setError(`${err.message}. Shared briefs live in server memory and expire; build it again below.`));
+    };
+    open();
+    window.addEventListener("popstate", open);
+    return () => window.removeEventListener("popstate", open);
   }, []);
+
+  useEffect(() => {
+    document.title = brief ? `${briefTitle(brief)} · Opener` : "Opener";
+  }, [brief]);
 
   async function onSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const f = new FormData(e.currentTarget);
-    const capacity = String(f.get("capacity") ?? "").trim();
+    const field = (k: string) => String(f.get(k) ?? "").trim() || undefined;
+    const input = scenario === "venue"
+      ? { scenario, venue: field("venue"), city: field("city"), date: field("date"), capacity: field("capacity") }
+      : { scenario, headliner: field("headliner"), city: field("city"), dateFrom: field("dateFrom"), dateTo: field("dateTo"), capacity: field("capacity") };
+    abort.current?.abort();
+    const controller = new AbortController();
+    abort.current = controller;
     setLoading(true);
     setError(null);
+    setBrief(null);
+    setTimeline([]);
+    setCopied(false);
     try {
-      setBrief(
-        await requestBrief({
-          headliner: String(f.get("headliner") ?? ""),
-          city: String(f.get("city") ?? ""),
-          dateFrom: String(f.get("dateFrom") ?? "") || undefined,
-          dateTo: String(f.get("dateTo") ?? "") || undefined,
-          capacity: capacity ? Number(capacity) : undefined,
-        }),
-      );
+      const b = await streamBrief(input, (ev) => setTimeline((items) => applyEvent(items, ev)), controller.signal);
+      if (controller.signal.aborted) return;
+      setBrief(b);
+      window.history.pushState(null, "", `/b/${b.id}`);
     } catch (err) {
-      setError((err as Error).message);
+      if (!controller.signal.aborted) setError((err as Error).message);
     } finally {
-      setLoading(false);
+      if (abort.current === controller) setLoading(false);
     }
   }
+
+  async function copyLink() {
+    if (!brief) return;
+    const url = `${window.location.origin}/b/${brief.id}`;
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+    } catch {
+      window.prompt("Copy this link", url);
+    }
+  }
+
+  const venue = scenario === "venue";
 
   return (
     <main className="page">
       <header className="masthead">
         <div>
           <h1>Opener</h1>
-          <p className="lede">Who should open for your headliner in this city, and the Qloo evidence behind every pick.</p>
+          <p className="lede">Booking decisions from Qloo's taste graph, with the evidence behind every pick.</p>
         </div>
         {health && (
           <span className={`badge ${health.qloo === "mock" ? "badge-warn" : "badge-ok"}`}>
@@ -52,23 +102,51 @@ export function App() {
         )}
       </header>
 
-      <form className="card form" onSubmit={onSubmit}>
-        <label>
-          Headliner
-          <input name="headliner" required maxLength={80} placeholder="e.g. an artist you are booking" />
-        </label>
-        <label>
-          City
-          <input name="city" required maxLength={80} placeholder="e.g. Berlin" />
-        </label>
-        <label>
-          From
-          <input name="dateFrom" type="date" />
-        </label>
-        <label>
-          To
-          <input name="dateTo" type="date" />
-        </label>
+      <div className="tabs no-print" role="tablist" aria-label="Booking question">
+        <button type="button" role="tab" aria-selected={!venue} className={!venue ? "tab active" : "tab"} onClick={() => setScenario("opener")}>
+          Find an opener for a headliner
+        </button>
+        <button type="button" role="tab" aria-selected={venue} className={venue ? "tab active" : "tab"} onClick={() => setScenario("venue")}>
+          Fill a free date at a venue
+        </button>
+      </div>
+
+      <form key={scenario} className={`card form no-print ${venue ? "form-venue" : ""}`} onSubmit={onSubmit}>
+        {venue ? (
+          <>
+            <label>
+              Venue
+              <input name="venue" required maxLength={80} placeholder="e.g. a club or hall you book" />
+            </label>
+            <label>
+              City
+              <input name="city" required maxLength={80} placeholder="e.g. Berlin" />
+            </label>
+            <label>
+              Free date
+              <input name="date" type="date" />
+            </label>
+          </>
+        ) : (
+          <>
+            <label>
+              Headliner
+              <input name="headliner" required maxLength={80} placeholder="e.g. an artist you are booking" />
+            </label>
+            <label>
+              City
+              <input name="city" required maxLength={80} placeholder="e.g. Berlin" />
+            </label>
+            <label>
+              From
+              <input name="dateFrom" type="date" />
+            </label>
+            <label>
+              To
+              <input name="dateTo" type="date" />
+            </label>
+          </>
+        )}
         <label>
           Capacity
           <input name="capacity" type="number" min={1} max={200000} placeholder="optional" />
@@ -78,29 +156,50 @@ export function App() {
 
       {error && <p className="card error" role="alert">{error}</p>}
 
+      {(loading || timeline.length > 0) && !brief && (
+        <section className="card live" aria-busy={loading}>
+          <h2>Agent at work</h2>
+          <p className="meta">Each Qloo and LLM call appears here as it happens.</p>
+          <AgentLog items={timeline} live />
+        </section>
+      )}
+
       {brief && (
         <div className="grid">
           <section className="card span-2">
-            <h2>Brief: {brief.headliner.name} in {brief.input.city}</h2>
+            <div className="brief-head">
+              <h2>{briefTitle(brief)}</h2>
+              <div className="actions no-print">
+                <button type="button" className="ghost" onClick={copyLink}>{copied ? "Link copied" : "Copy link"}</button>
+                <a className="ghost button" href={markdownUrl(brief.id)} download>Markdown</a>
+                <button type="button" className="ghost" onClick={() => window.print()}>Print / PDF</button>
+              </div>
+            </div>
             <p className="narrative">{brief.narrative}</p>
             <p className="meta">
-              Headliner trend (90 days): <strong>{brief.headliner.trend}</strong> · agent: {brief.agent} · data: {brief.mode}
+              {brief.input.scenario === "opener" && <>Headliner trend (90 days): <strong>{brief.subject.trend}</strong> · </>}
+              {brief.input.capacity ? <>capacity {brief.input.capacity} · </> : null}
+              agent: {brief.agent} · data: {brief.mode} · {brief.generatedAt.slice(0, 16).replace("T", " ")} UTC
+              {brief.cached ? " · from cache" : ""}
             </p>
+            <p className="meta print-only">Shared link: {window.location.origin}/b/{brief.id} (expires; stored in server memory only)</p>
           </section>
 
           <section className="card span-2">
-            <h2>Top opener candidates</h2>
-            <Openers openers={brief.openers} />
+            <h2>{brief.input.scenario === "venue" ? "Acts to book" : "Top opener candidates"}</h2>
+            <Openers candidates={brief.candidates} />
           </section>
 
           <section className="card">
             <h2>Where the fans are</h2>
             <FanMap points={brief.heatmap} />
-            <p className="meta">Relative affinity inside {brief.input.city}; not head counts.</p>
+            <p className="meta">
+              {brief.heatmapOf ? `Fans of ${brief.heatmapOf}: ` : ""}relative affinity inside {brief.input.city}; not head counts.
+            </p>
           </section>
 
           <section className="card">
-            <h2>Audience skew</h2>
+            <h2>{brief.input.scenario === "venue" ? "The venue's crowd" : "Audience skew"}</h2>
             <Demographics data={brief.demographics} />
             {brief.tasteTags.length > 0 && (
               <p className="tags">{brief.tasteTags.map((t) => <span key={t} className="tag">{t}</span>)}</p>
@@ -108,7 +207,7 @@ export function App() {
           </section>
 
           <section className="card">
-            <h2>Local partners</h2>
+            <h2>{brief.input.scenario === "venue" ? "Cross-promotion and sponsors" : "Local partners"}</h2>
             {brief.partners.length === 0 ? (
               <p className="meta">No partner leads returned.</p>
             ) : (
@@ -129,7 +228,7 @@ export function App() {
 
           <section className="card span-2">
             <h2>Agent log</h2>
-            <AgentLog steps={brief.trace} />
+            <AgentLog items={timeline.length > 0 ? timeline : timelineFromBrief(brief)} />
           </section>
         </div>
       )}

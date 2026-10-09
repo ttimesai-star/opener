@@ -2,8 +2,8 @@ import type { Brief } from "../api.ts";
 
 const TREND_LABEL = { rising: "↑ rising", falling: "↓ falling", flat: "→ flat", unknown: "n/a" } as const;
 
-export function Openers({ openers }: { openers: Brief["openers"] }) {
-  if (openers.length === 0) return <p className="meta">No candidates returned. Check the agent log.</p>;
+export function Openers({ candidates }: { candidates: Brief["candidates"] }) {
+  if (candidates.length === 0) return <p className="meta">No candidates returned. Check the agent log.</p>;
   return (
     <table className="openers">
       <thead>
@@ -11,11 +11,12 @@ export function Openers({ openers }: { openers: Brief["openers"] }) {
           <th>#</th>
           <th>Act</th>
           <th>Audience overlap</th>
+          <th title="Qloo popularity percentile">Popularity</th>
           <th>90-day trend</th>
         </tr>
       </thead>
       <tbody>
-        {openers.map((o, i) => (
+        {candidates.map((o, i) => (
           <tr key={o.name}>
             <td>{i + 1}</td>
             <td>{o.name}</td>
@@ -25,6 +26,7 @@ export function Openers({ openers }: { openers: Brief["openers"] }) {
               </div>
               <span className="score">{o.overlapScore}</span>
             </td>
+            <td className="score">{o.popularity === null ? "n/a" : Math.round(o.popularity * 100)}</td>
             <td className={`trend trend-${o.trend}`}>{TREND_LABEL[o.trend]}</td>
           </tr>
         ))}

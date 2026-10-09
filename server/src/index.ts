@@ -8,7 +8,7 @@ const staticDir = process.env.STATIC_DIR ?? fileURLToPath(new URL("../../web/dis
 
 const qloo = await createQlooClient();
 const llm = createLlm();
-const server = createApp({ qloo, llm, staticDir, allowedOrigin: process.env.ALLOWED_ORIGIN });
+const server = createApp({ qloo, llm, staticDir, allowedOrigin: process.env.ALLOWED_ORIGIN, trustProxy: process.env.TRUST_PROXY === "1" });
 
 server.listen(port, () => {
   console.log(`opener listening on :${port} (qloo=${qloo.mode}, llm=${llm ? "on" : "off -> scripted planner"})`);

@@ -37,3 +37,15 @@ test("demographics read age and gender maps", () => {
   assert.deepEqual(d, { age: { "25_to_29": 0.2 }, gender: { female: 0.1 } });
   assert.equal(readDemographics([]), null);
 });
+
+test("heatmap accepts lat/lon and GeoJSON coordinates", () => {
+  const pts = readHeatmap([
+    { location: { lat: 1, lon: 2 }, query: { affinity: 1 } },
+    { location: { coordinates: [4, 3] }, query: { affinity: 0.5 } },
+  ]);
+  assert.deepEqual(pts, [{ lat: 1, lng: 2, weight: 1 }, { lat: 3, lng: 4, weight: 0.5 }]);
+});
+
+test("demographics wrapped in a demographics object", () => {
+  assert.deepEqual(readDemographics({ demographics: { age: { "25_to_29": 0.3 }, gender: {} } }), { age: { "25_to_29": 0.3 }, gender: {} });
+});

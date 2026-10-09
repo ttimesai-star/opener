@@ -46,3 +46,13 @@ test("POST /api/brief rate-limits uncached requests and rejects bad input", asyn
   const limited = await fetch(`${base}/api/brief`, { method: "POST", body: JSON.stringify({ headliner: "B3", city: "Rome" }) });
   assert.equal(limited.status, 429);
 });
+
+test("spoofed X-Forwarded-For does not reset the limit without TRUST_PROXY", async () => {
+  const s = createApp({ qloo: new MockQlooClient(), llm: null, rateLimitPerHour: 1 });
+  await new Promise<void>((r) => s.listen(0, r));
+  const url = `http://127.0.0.1:${(s.address() as AddressInfo).port}/api/brief`;
+  const post = (h: string, xff: string) => fetch(url, { method: "POST", headers: { "x-forwarded-for": xff }, body: JSON.stringify({ headliner: h, city: "Oslo" }) });
+  assert.equal((await post("S1", "1.1.1.1")).status, 200);
+  assert.equal((await post("S2", "2.2.2.2")).status, 429);
+  s.close();
+});

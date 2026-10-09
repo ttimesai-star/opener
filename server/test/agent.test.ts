@@ -98,3 +98,15 @@ test("Qloo errors become caveats, not crashes", async () => {
   assert.ok(brief.caveats.some((c) => c.includes("qloo_audience_demographics returned no results")));
   assert.ok(!brief.caveats.some((c) => c.startsWith("DEMO MODE")));
 });
+
+test("an ambiguous headliner (needs_input) is surfaced as a caveat", async () => {
+  const mock = new MockQlooClient();
+  const ambiguous: QlooClient = {
+    mode: "live",
+    close: async () => {},
+    call: async (tool, args) =>
+      tool === "qloo_describe" ? { operation: "describe", status: "needs_input", results: [] } : mock.call(tool, args),
+  };
+  const brief = await runAgent({ input: INPUT, qloo: ambiguous, today: TODAY });
+  assert.ok(brief.caveats.some((c) => c.includes("could not pin down")));
+});

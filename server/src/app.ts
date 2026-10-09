@@ -3,7 +3,7 @@
 
 import { createReadStream, existsSync, statSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { extname, join, normalize, resolve } from "node:path";
+import { extname, join, normalize, resolve, sep } from "node:path";
 import { runAgent } from "./agent/agent.ts";
 import type { Llm } from "./agent/llm.ts";
 import type { Brief, BriefInput } from "./agent/types.ts";
@@ -15,6 +15,8 @@ export interface AppDeps {
   staticDir?: string;
   allowedOrigin?: string; // CORS origin for a separately hosted web app, e.g. https://opener.pages.dev
   rateLimitPerHour?: number;
+  globalLimitPerHour?: number; // cap on uncached briefs for everyone: protects the Qloo quota
+  trustProxy?: boolean; // behind one reverse proxy (HF Spaces, Render): use the address it appended
   cacheTtlMs?: number;
 }
 
@@ -69,6 +71,7 @@ async function readJson(req: IncomingMessage, limit = 4096): Promise<unknown> {
 
 export function createApp(deps: AppDeps): Server {
   const limit = deps.rateLimitPerHour ?? 30;
+  const globalLimit = deps.globalLimitPerHour ?? 300;
   const ttl = deps.cacheTtlMs ?? 6 * 3600_000;
   const hits = new Map<string, number[]>();
   // Private server-side cache (allowed by the hackathon guide); never written to the repo.
@@ -78,10 +81,24 @@ export function createApp(deps: AppDeps): Server {
   const allow = (ip: string): boolean => {
     const now = Date.now();
     const recent = (hits.get(ip) ?? []).filter((t) => now - t < 3600_000);
-    if (recent.length >= limit) return false;
+    const all = (hits.get("*") ?? []).filter((t) => now - t < 3600_000);
+    if (recent.length >= limit || all.length >= globalLimit) return false;
     recent.push(now);
+    all.push(now);
     hits.set(ip, recent);
+    hits.set("*", all);
     return true;
+  };
+
+  // The left-most X-Forwarded-For entry is client-controlled. Only the entry the
+  // trusted proxy appended (right-most) is used, and only when TRUST_PROXY is on.
+  const clientIp = (req: IncomingMessage): string => {
+    const xff = req.headers["x-forwarded-for"];
+    if (deps.trustProxy && typeof xff === "string") {
+      const last = xff.split(",").map((s) => s.trim()).filter(Boolean).pop();
+      if (last) return last;
+    }
+    return req.socket.remoteAddress ?? "?";
   };
 
   return createServer(async (req, res) => {
@@ -105,8 +122,7 @@ export function createApp(deps: AppDeps): Server {
         const key = JSON.stringify(parsed.input).toLowerCase();
         const hit = cache.get(key);
         if (hit && Date.now() - hit.at < ttl) return send(res, 200, { ...hit.brief, cached: true });
-        const ip = (req.headers["x-forwarded-for"] as string | undefined)?.split(",")[0]?.trim() || req.socket.remoteAddress || "?";
-        if (!allow(ip)) return send(res, 429, { error: "rate limit: try again later" });
+        if (!allow(clientIp(req))) return send(res, 429, { error: "rate limit: try again later" });
         const brief = await runAgent({ input: parsed.input, qloo: deps.qloo, llm: deps.llm });
         cache.set(key, { at: Date.now(), brief });
         return send(res, 200, brief);
@@ -124,7 +140,7 @@ export function createApp(deps: AppDeps): Server {
 function serveStatic(root: string, pathname: string, res: ServerResponse): void {
   const rel = normalize(decodeURIComponent(pathname)).replace(/^([/\\])+/, "");
   let file = join(root, rel);
-  if (!file.startsWith(root)) {
+  if (file !== root && !file.startsWith(root + sep)) {
     res.writeHead(403).end();
     return;
   }

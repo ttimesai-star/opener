@@ -96,6 +96,7 @@ export function buildCaveats(b: BriefCore, evidence: EvidenceItem[]): string[] {
   if (b.input.capacity) out.push(`Capacity (${b.input.capacity}) is not a Qloo input; whether an opener can help fill it is your call.`);
   for (const e of evidence) {
     if (e.envelope.status === "error") out.push(`${e.tool} failed (${e.envelope.error?.code ?? "UNKNOWN"}); the related section may be missing.`);
+    else if (e.envelope.status === "needs_input") out.push(`${e.tool}: Qloo could not pin down "${String(e.args.entity ?? e.args.signals ?? "")}" unambiguously; check the spelling or pick the intended entity.`);
     else if (e.envelope.status === "empty") out.push(`${e.tool} returned no results; the related section is empty, not zero.`);
     else if (e.envelope.status === "partial" || e.envelope.status === "degraded") out.push(`${e.tool} came back ${e.envelope.status}: ${e.envelope.summary ?? ""}`.trim());
   }

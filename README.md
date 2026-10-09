@@ -105,6 +105,13 @@ CI (GitHub Actions) runs typecheck, unit/API tests, the web build, and a Docker 
 - The fan map shows relative affinity inside the chosen area, not head counts.
 - Demographics are aggregate affinities and say nothing about any person.
 
+## Roadmap (before submission)
+
+- Verify every normalizer against live `qloo mcp` payloads on the first day with a key.
+- Stream the agent log to the page as it runs (Server-Sent Events), so viewers watch each Qloo call land.
+- Cross-domain show ideas from the same audience: films, podcasts and brands for theme nights, merch and pre-show playlists.
+- Ask the user to pick when Qloo returns `needs_input` for an ambiguous headliner, instead of only flagging it.
+
 ## Disclosure
 
 Built with AI coding agents (Claude Code, with review by Google Jules), directed and reviewed by the author. The runtime agent uses an LLM to choose Qloo tool calls and to write the narrative paragraph.

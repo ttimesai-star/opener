@@ -14,7 +14,7 @@ export function asArray(v: unknown): unknown[] {
   if (Array.isArray(v)) return v;
   const r = asRecord(v);
   if (!r) return [];
-  for (const key of ["entities", "heatmap", "demographics", "trending", "tags", "items"]) {
+  for (const key of ["entities", "heatmap", "demographics", "trending", "tags", "items", "series", "data"]) {
     if (Array.isArray(r[key])) return r[key] as unknown[];
   }
   return [];
@@ -50,8 +50,10 @@ export function readHeatmap(results: unknown): HeatPoint[] {
     const r = asRecord(item);
     const loc = asRecord(r?.location);
     const query = asRecord(r?.query);
-    const lat = num(loc?.latitude) ?? num(loc?.lat);
-    const lng = num(loc?.longitude) ?? num(loc?.lng) ?? num(loc?.lon);
+    // Accept latitude/longitude, lat/lng|lon, or GeoJSON-style coordinates [lng, lat].
+    const coords = Array.isArray(loc?.coordinates) ? (loc?.coordinates as unknown[]) : [];
+    const lat = num(loc?.latitude) ?? num(loc?.lat) ?? num(coords[1]);
+    const lng = num(loc?.longitude) ?? num(loc?.lng) ?? num(loc?.lon) ?? num(coords[0]);
     const w = num(query?.affinity) ?? num(r?.affinity);
     return lat !== null && lng !== null && w !== null ? [{ lat, lng, weight: w }] : [];
   });
@@ -60,8 +62,8 @@ export function readHeatmap(results: unknown): HeatPoint[] {
 }
 
 export function readDemographics(results: unknown): Demographics | null {
-  const first = asRecord(asArray(results)[0]);
-  const query = asRecord(first?.query) ?? first;
+  const first = asRecord(asArray(results)[0]) ?? asRecord(asRecord(results)?.demographics);
+  const query = asRecord(first?.query) ?? asRecord(first?.demographics) ?? first;
   const age = asRecord(query?.age);
   const gender = asRecord(query?.gender);
   if (!age && !gender) return null;
@@ -77,7 +79,8 @@ export function readTrends(results: unknown): Map<string, Trend> {
     const r = asRecord(item);
     const name = asRecord(r?.entity)?.name;
     if (typeof name !== "string") continue;
-    const values = asArray(r?.points).flatMap((p) => {
+    const points = asArray(r?.points).length > 0 ? asArray(r?.points) : asArray(r?.series ?? r?.data);
+    const values = points.flatMap((p) => {
       const pr = asRecord(p);
       const v = num(pr?.population_percentile) ?? num(pr?.popularity) ?? num(pr?.value);
       return v === null ? [] : [v];

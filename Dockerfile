@@ -10,7 +10,8 @@ COPY web/package.json web/package.json
 RUN npm ci
 COPY . .
 RUN npm run build && npm prune --omit=dev
-ENV NODE_ENV=production PORT=7860 QLOO_HOME=/tmp/qloo-home
+# TRUST_PROXY=1: rate limiting uses the address appended by the host's reverse proxy.
+ENV NODE_ENV=production PORT=7860 QLOO_HOME=/tmp/qloo-home TRUST_PROXY=1
 EXPOSE 7860
 USER node
 CMD ["node", "server/src/index.ts"]

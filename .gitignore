@@ -1,0 +1,8 @@
+node_modules/
+web/dist/
+.env
+.env.*
+!.env.example
+*.log
+# Never commit real Qloo responses (hackathon terms): cache stays server-side.
+cache/

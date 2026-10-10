@@ -53,7 +53,9 @@ export async function streamBrief(input: Record<string, unknown>, onEvent: (e: A
   for (;;) {
     const { value, done } = await reader.read();
     if (done) break;
-    buffer += value.replace(/\r\n/g, "\n");
+    if (signal?.aborted) break;
+    // Normalise CRLF on the whole buffer: a \r\n pair can be split across two chunks.
+    buffer = (buffer + value).replace(/\r\n/g, "\n");
     let cut: number;
     while ((cut = buffer.indexOf("\n\n")) >= 0) {
       const block = buffer.slice(0, cut);
@@ -62,15 +64,17 @@ export async function streamBrief(input: Record<string, unknown>, onEvent: (e: A
       const data: string[] = [];
       for (const line of block.split("\n")) {
         if (line.startsWith("event:")) event = line.slice(6).trim();
-        else if (line.startsWith("data:")) data.push(line.slice(5).trimStart());
+        else if (line.startsWith("data:")) data.push(line.slice(line.startsWith("data: ") ? 6 : 5)); // SSE strips one space only
       }
       if (data.length === 0) continue; // heartbeat comment
       const payload = JSON.parse(data.join("\n")) as unknown;
+      if (signal?.aborted) break; // a newer request owns the timeline now
       if (event === "step") onEvent(payload as AgentEvent);
       else if (event === "brief") brief = payload as StoredBrief;
       else if (event === "error") throw new Error((payload as { error?: string }).error ?? "agent failed");
     }
   }
+  if (signal?.aborted) throw new DOMException("aborted", "AbortError");
   if (!brief) throw new Error("The stream ended before the brief was ready. Try again.");
   return brief;
 }

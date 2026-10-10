@@ -164,3 +164,20 @@ test("LLM errors are recorded as failed calls and noted in the caveats", async (
   assert.ok(brief.llmCalls.length >= 1 && brief.llmCalls.every((c) => c.status === "error"));
   assert.ok(brief.caveats.some((c) => c.includes("LLM was unavailable")));
 });
+
+test("venue: an empty rank never produces a trends call with no entities (Jules review)", async () => {
+  const mock = new MockQlooClient();
+  const calls: string[] = [];
+  const emptyRank: QlooClient = {
+    mode: "live",
+    close: async () => {},
+    call: async (tool, args) => {
+      calls.push(tool);
+      if (tool === "qloo_trends") assert.ok((args.entities as string[]).length > 0, "trends called with []");
+      return tool === "qloo_rank" ? { operation: "rank", status: "empty", results: [] } : mock.call(tool, args);
+    },
+  };
+  const brief = await runAgent({ input: VENUE, qloo: emptyRank, today: TODAY });
+  assert.ok(!calls.includes("qloo_trends"));
+  assert.ok(brief.caveats.some((c) => c.includes("qloo_rank returned no results")));
+});

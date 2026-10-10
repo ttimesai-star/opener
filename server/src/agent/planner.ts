@@ -101,8 +101,9 @@ export function nextPlannedStep(input: BriefInput, evidence: EvidenceItem[], tod
       purpose: "Score the shortlist against one shared profile so scores are comparable",
     };
   }
-  if (want("trends") && have("rank")) {
-    const entities = venue ? rankedNames(evidence, 5, s) : [s, ...rankedNames(evidence, 4, s)];
+  const trendEntities = venue ? rankedNames(evidence, 5, s) : [s, ...rankedNames(evidence, 4, s)];
+  if (want("trends") && have("rank") && trendEntities.length > 0) {
+    const entities = trendEntities;
     return {
       kind: "trends", tool: "qloo_trends",
       args: { entities, entity_type: "artist", start_date: isoDaysAgo(90, today), end_date: isoDaysAgo(1, today) },

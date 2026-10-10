@@ -121,6 +121,10 @@ export function createApp(deps: AppDeps): Server {
     const recent = (hits.get(ip) ?? []).filter((t) => now - t < 3600_000);
     const all = (hits.get("*") ?? []).filter((t) => now - t < 3600_000);
     if (recent.length >= limit || all.length >= globalLimit) return false;
+    if (hits.size > 5000) {
+      // Bound memory: forget addresses with no request in the last hour.
+      for (const [k, ts] of hits) if (k !== "*" && !ts.some((t) => now - t < 3600_000)) hits.delete(k);
+    }
     recent.push(now);
     all.push(now);
     hits.set(ip, recent);
@@ -138,9 +142,18 @@ export function createApp(deps: AppDeps): Server {
     return hit.brief;
   };
 
+  let lastSweep = 0;
+  const sweep = (now: number) => {
+    if (now - lastSweep < 60_000) return;
+    lastSweep = now;
+    for (const [id, v] of briefs) if (now - v.at >= briefTtl) briefs.delete(id); // drop expired
+    for (const [k, id] of cache) if (!briefs.has(id)) cache.delete(k);
+  };
+
   const store = (key: string, brief: Brief): Brief => {
     const now = Date.now();
-    for (const [id, v] of briefs) if (now - v.at >= briefTtl) briefs.delete(id); // drop expired
+    lastSweep = 0;
+    sweep(now);
     while (briefs.size >= maxStored) {
       const oldest = briefs.keys().next().value as string; // Map keeps insertion order
       briefs.delete(oldest);
@@ -174,6 +187,7 @@ export function createApp(deps: AppDeps): Server {
 
   /** Validation, cache and rate limit shared by the JSON and the streaming endpoint. */
   const prepare = async (req: IncomingMessage): Promise<Prepared> => {
+    sweep(Date.now());
     const parsed = validateInput(await readJson(req).catch(() => null));
     if (!parsed.ok) return { status: 400, body: { error: parsed.error } };
     const key = cacheKey(parsed.input);
@@ -195,6 +209,10 @@ export function createApp(deps: AppDeps): Server {
     let open = true;
     res.on("close", () => {
       open = false;
+    });
+    res.on("error", (error) => {
+      open = false; // viewer went away mid-stream; the run still finishes and is stored
+      console.warn(`stream socket error: ${error.message}`);
     });
     const write = (event: string, data: unknown) => {
       if (open && !res.writableEnded) res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);

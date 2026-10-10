@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { getBrief, getHealth, markdownUrl, streamBrief, type Health, type StoredBrief } from "./api.ts";
 import { AgentLog, applyEvent, timelineFromBrief, type TimelineItem } from "./components/AgentLog.tsx";
 import { Demographics } from "./components/Demographics.tsx";
@@ -64,7 +64,9 @@ export function App() {
     setTimeline([]);
     setCopied(false);
     try {
-      const b = await streamBrief(input, (ev) => setTimeline((items) => applyEvent(items, ev)), controller.signal);
+      const b = await streamBrief(input, (ev) => {
+        if (!controller.signal.aborted) setTimeline((items) => applyEvent(items, ev));
+      }, controller.signal);
       if (controller.signal.aborted) return;
       setBrief(b);
       window.history.pushState(null, "", `/b/${b.id}`);
@@ -88,6 +90,15 @@ export function App() {
 
   const venue = scenario === "venue";
 
+  // Arrow keys move between the two tabs (WAI-ARIA tabs pattern).
+  function onTabKey(e: KeyboardEvent<HTMLButtonElement>) {
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight" && e.key !== "Home" && e.key !== "End") return;
+    e.preventDefault();
+    const next: Scenario = e.key === "Home" ? "opener" : e.key === "End" ? "venue" : venue ? "opener" : "venue";
+    setScenario(next);
+    document.getElementById(`tab-${next}`)?.focus();
+  }
+
   return (
     <main className="page">
       <header className="masthead">
@@ -103,15 +114,18 @@ export function App() {
       </header>
 
       <div className="tabs no-print" role="tablist" aria-label="Booking question">
-        <button type="button" role="tab" aria-selected={!venue} className={!venue ? "tab active" : "tab"} onClick={() => setScenario("opener")}>
+        <button type="button" role="tab" id="tab-opener" aria-controls="brief-form" aria-selected={!venue} tabIndex={venue ? -1 : 0}
+          className={!venue ? "tab active" : "tab"} onClick={() => setScenario("opener")} onKeyDown={onTabKey}>
           Find an opener for a headliner
         </button>
-        <button type="button" role="tab" aria-selected={venue} className={venue ? "tab active" : "tab"} onClick={() => setScenario("venue")}>
+        <button type="button" role="tab" id="tab-venue" aria-controls="brief-form" aria-selected={venue} tabIndex={venue ? 0 : -1}
+          className={venue ? "tab active" : "tab"} onClick={() => setScenario("venue")} onKeyDown={onTabKey}>
           Fill a free date at a venue
         </button>
       </div>
 
-      <form key={scenario} className={`card form no-print ${venue ? "form-venue" : ""}`} onSubmit={onSubmit}>
+      <form key={scenario} id="brief-form" role="tabpanel" aria-labelledby={venue ? "tab-venue" : "tab-opener"}
+        className={`card form no-print ${venue ? "form-venue" : ""}`} onSubmit={onSubmit}>
         {venue ? (
           <>
             <label>

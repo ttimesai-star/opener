@@ -6,7 +6,7 @@
 import { isQlooTool, type QlooClient, type QlooEnvelope, type QlooToolName } from "../qloo/types.ts";
 import { buildBrief } from "./brief.ts";
 import type { ChatMessage, ChatResult, Llm, ToolSpec } from "./llm.ts";
-import { isoDaysAgo, nextPlannedStep, TREND_POINTS, TREND_QUERY_DAYS } from "./planner.ts";
+import { isoDaysAgo, nextPlannedStep, TREND_POINTS, TREND_QUERY_DAYS, withPartnerFilter } from "./planner.ts";
 import { TOOL_SPECS } from "./toolSpecs.ts";
 import type { AgentEvent, Brief, BriefInput, EvidenceItem, LlmCall, TraceStep } from "./types.ts";
 
@@ -42,7 +42,7 @@ export function systemPrompt(input: BriefInput, today: Date): string {
       `4) qloo_trends for the top 5 ranked artists, entity_type=artist, ${window}.`,
       "5) qloo_where_popular for the top ranked artist within the city.",
       "6) qloo_audience_demographics for the venue (entity_type place).",
-      "7) qloo_recommend target_type=place with filter_location=city; 8) qloo_recommend target_type=brand; 9) qloo_entity_tags for the venue (entity_type place).",
+      "7) qloo_recommend target_type=place with filter_location=city; 8) qloo_recommend target_type=brand; 9) qloo_entity_tags for the top 3 ranked artists (entity_type artist), limit 20.",
       ...common,
     ].join("\n");
   }
@@ -56,7 +56,7 @@ export function systemPrompt(input: BriefInput, today: Date): string {
     `4) qloo_trends for the headliner plus the top 4 ranked artists, entity_type=artist, ${window}.`,
     "5) qloo_where_popular for the headliner within the city.",
     "6) qloo_audience_demographics for the headliner.",
-    "7) qloo_recommend target_type=place with filter_location=city; 8) qloo_recommend target_type=brand; 9) qloo_entity_tags for the headliner.",
+    "7) qloo_recommend target_type=place with filter_location=city; 8) qloo_recommend target_type=brand; 9) qloo_entity_tags for the headliner, limit 20.",
     ...common,
   ].join("\n");
 }
@@ -93,7 +93,9 @@ export async function runAgent(opts: RunOptions): Promise<Brief> {
   let llmUsed = false;
   let plannerUsed = false;
 
-  const execute = async (actor: TraceStep["actor"], tool: QlooToolName, args: Record<string, unknown>, purpose?: string): Promise<QlooEnvelope> => {
+  const execute = async (actor: TraceStep["actor"], tool: QlooToolName, rawArgs: Record<string, unknown>, purpose?: string): Promise<QlooEnvelope> => {
+    // Partner places are always restricted to bars, shops and clubs, whoever asks.
+    const args = withPartnerFilter(input, tool, rawArgs);
     const id = ++seq;
     safeEmit(opts.onEvent, { type: "start", seq: id, kind: "qloo", actor, tool, purpose, args });
     const started = Date.now();
@@ -207,7 +209,7 @@ export async function writeNarrative(llm: Llm, brief: Brief, chat?: (messages: C
   const messages: ChatMessage[] = [
     {
       role: "system",
-      content: `Write a 3-4 sentence booking brief for ${venue ? "a venue deciding whom to book for a free date" : "a concert promoter choosing an opener"}. Use only the facts in the JSON. Do not invent numbers, names, dates or reasons. Overlap scores are relative within this brief, not forecasts. Plain English, no hype, no markdown.`,
+      content: `Write a 3-4 sentence booking brief for ${venue ? "a venue deciding whom to book for a free date" : "a concert promoter choosing an opener"}. Use only the facts in the JSON. Do not invent numbers, names, dates or reasons. Fit scores are 0-100 relative within one Qloo rank call (100 = strongest act ranked, 0 = weakest), not forecasts; never call them percentages. Plain English, no hype, no markdown.`,
     },
     { role: "user", content: JSON.stringify(facts) },
   ];

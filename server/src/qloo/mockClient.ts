@@ -166,7 +166,10 @@ export class MockQlooClient implements QlooClient {
       case "qloo_entity_tags": {
         const rnd = seeded(hash(strList(args.entities).join("|")));
         const tags = ["indie pop", "dream pop", "festival", "late-night", "vinyl collector", "synthwave", "singer-songwriter"];
-        return envelope("entity_tags", pick(tags, rnd, 5).map((name) => ({ id: `urn:tag:mock:${name.replace(/\W+/g, "_")}`, name, type: "urn:tag:genre", affinity: Number(rnd().toFixed(3)) })));
+        // Live entity_tags mixes tag families; the mock does too, so the filter is exercised.
+        const taste = pick(tags, rnd, 5).map((name) => ({ id: `urn:tag:genre:music:${name.replace(/\W+/g, "_")}`, name, type: "urn:tag:genre:music", affinity: Number(rnd().toFixed(3)) }));
+        const noise = [{ id: "urn:tag:credit_card:place:mock_card", name: "Mock Card", type: "urn:tag:credit_card:place", affinity: 0.9 }];
+        return envelope("entity_tags", [...noise, ...taste]);
       }
       case "qloo_compare_audiences": {
         const rnd = seeded(hash(`${strList(args.group_a).join("|")}>${strList(args.group_b).join("|")}`));

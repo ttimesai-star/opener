@@ -9,16 +9,16 @@ Opener is an agent for concert promoters and venue bookers. It answers two booki
 
 The agent calls Qloo's taste tools and returns a booking brief:
 
-- **Top 5 opener candidates**, scored by audience overlap with the headliner in that city
+- **Top 5 opener candidates**, scored by audience fit with the headliner in that city
 - **Where the fans are**: a map of where the headliner's affinity is concentrated inside the city
 - **Trend**: whether the headliner and each candidate rose or fell over the last 90 days
 - **Audience skew**: aggregate age and gender over/under-indexing
-- **Local partners**: venues, bars and shops in the city plus brands that the same audience likes
+- **Local partners**: bars, pubs, cafes, record and clothing stores and music venues in the city, plus brands, that the same audience likes (landmarks and museums are filtered out)
 - **What this does not prove**: the limits of the evidence, written into every brief
 - **Live agent log**: every Qloo and LLM call streams to the page as it happens (Server-Sent Events), with who made it (LLM or planner), status, duration, a one-line result and the request behind it
 - **Share and export**: each brief gets a link (`/b/<id>`), a Markdown download and a print / save-as-PDF layout. Shared briefs live in server memory only and expire (24 h by default)
 
-> Status: runs on live Qloo data (hackathon key, verified 2026-10-13 end to end: all nine evidence calls return `ok`). Without a key the app falls back to **synthetic mock data** (fictional names, generated numbers) and says so on screen.
+> Status: **prototype** for the Qloo Agentic Hackathon. It runs on live Qloo data (hackathon key; both scenarios checked end to end on 2026-10-13: Radiohead in Berlin, SO36 in Berlin, Mohawk in Austin). It has not been used by a real promoter yet. Without a key the app falls back to **synthetic mock data** (fictional names, generated numbers) and says so on screen.
 
 ## The problem
 
@@ -50,10 +50,16 @@ Qloo tools used (all through the official harness MCP server):
 | Trend | `qloo_trends` | 90-day popularity series for headliner + top candidates |
 | Fan map | `qloo_where_popular` | Heatmap of affinity inside the city |
 | Audience skew | `qloo_audience_demographics` | Aggregate age/gender affinity |
-| Partners | `qloo_recommend` (place with `filter_location`, brand) | Local venues and sponsor leads |
-| Promo vocabulary | `qloo_entity_tags` | Taste concepts that describe the audience |
+| Partners | `qloo_recommend` (place with `filter_location` + `include_tags` category URNs, brand) | Local businesses and sponsor leads |
+| Promo vocabulary | `qloo_entity_tags` (20 tags, filtered by tag family) | Taste concepts that describe the audience |
 
-In the venue scenario the anchor is the venue (`qloo_describe` with `type: place`): candidates and the rank are weighted to the crowd that likes the venue, trends cover the top five candidates, the map shows where the top candidate's fans are in the city, and demographics and tags describe the venue's crowd.
+In the venue scenario the anchor is the venue (`qloo_describe` with `type: place`): candidates and the rank are weighted to the crowd that likes the venue, trends cover the top five candidates, and the map shows where the top candidate's fans are in the city. What live Qloo forced in this scenario:
+
+- A venue name that Qloo calls ambiguous ("Mohawk": Austin, Bend, a college, a park) is retried once as "name city".
+- Qloo returns no demographics for most places (SO36: `ok`, empty). The brief then shows the skew of the top candidate's fans and says so in the card and in the caveats.
+- Brand recommendations with a place as the signal fail (400 `QLOO_CONTRACT`), so sponsor leads use the top three acts as signals.
+- Taste tags come from the top three acts: a venue's own tags are amenities and cuisine ("Meeting Rooms", "Fusion").
+- Partner places leave out bars, live-music venues and nightclubs (competing rooms); cafes, pubs, breweries, record and clothing stores stay.
 
 API:
 
@@ -69,7 +75,9 @@ Design rules:
 
 - **Numbers come from Qloo, prose from the LLM.** The brief is assembled deterministically from tool results. The LLM chooses calls and writes a short narrative from the brief's own JSON; it cannot add facts.
 - **The agent degrades, it does not break.** If the LLM is rate-limited or down, the scripted planner finishes the same evidence plan. Every Qloo `error`, `empty`, `partial` or `degraded` status becomes a visible caveat.
-- **Overlap score** = the candidate's affinity divided by the top candidate's affinity in the same `qloo_rank` call (0-100). It is not a forecast.
+- **Audience fit (0-100)** = min-max over every act in one `qloo_rank` call: 100 = the strongest act ranked, 0 = the weakest. Live affinities for a headliner's neighbours sit within about 0.01 of each other (Radiohead in Berlin, 2026-10-13: top five 0.9655-0.9744), so a ratio to the leader showed 99-100 for everyone. The raw affinity is in the JSON and in the bar's tooltip. Scores from different briefs are not comparable, and they are not forecasts.
+- **Partners are businesses.** Unfiltered place recommendations for a city were museums and memorials (Berlin: The Wall Museum, Memorial to the Murdered Jews of Europe). The place call is constrained to Qloo category tags (`urn:tag:category:place:bar`, `pub`, `brewery`, `coffee_shop`, `record_store`, `clothing_store`, `live_music_venue`, ...), whoever makes the call, LLM or planner.
+- **Tags are taste, not logistics.** `qloo_entity_tags` mixes families (`credit_card`, `cost_description`, `specialty_dish`, `hotel_rating`). Opener keeps `genre:music`, `audience`, `style`, `theme` and `keyword:media` tags only.
 - **Safe use.** Inputs are an artist and a city; obvious personal data is rejected. Nothing infers anything about individuals. Qloo responses and shared briefs are kept only in server memory with a TTL and never written to disk or to this repository.
 
 ## Run locally
@@ -108,7 +116,19 @@ Any OpenAI-compatible endpoint with tool calling. Default primary is the Gemini 
 
 The harness MCP server is a local process, so the kit rules out browser-only and serverless hosting. Opener ships as one container (`Dockerfile`): Node server + built web app + `qloo mcp`.
 
-- **Hugging Face Spaces** (Docker SDK, free CPU Basic: 2 vCPU, 16 GB; sleeps when idle and wakes on the next visit). Set `QLOO_API_KEY` and `LLM_*` as Space secrets.
+- **Hugging Face Spaces** (Docker SDK, free CPU Basic: 2 vCPU, 16 GB; sleeps when idle and wakes on the next visit). Steps:
+  1. Create a Space with SDK **Docker**, blank template, hardware CPU Basic (free).
+  2. Push this repository to the Space (`git remote add space https://huggingface.co/spaces/<user>/opener` then `git push space main`). The Space reads its settings from YAML at the top of its `README.md`; add this header in the Space copy:
+     ```yaml
+     ---
+     title: Opener
+     sdk: docker
+     app_port: 7860
+     ---
+     ```
+  3. Settings > Variables and secrets: add secret `QLOO_API_KEY` (and optionally `LLM_API_KEY`). The key stays in the Space's secret store; the browser never sees it.
+  4. Open the Space; the header badge should say "Live Qloo".
+  Not deployed yet (no Hugging Face account on the project side as of 2026-10-13).
 - Any other container host works the same way. Render's free tier also works but spins down after 15 minutes idle (about a minute to wake).
 - Optional: host `web/` separately (e.g. Cloudflare Pages) with `VITE_API_BASE` at build time and `ALLOWED_ORIGIN` on the server.
 
@@ -129,7 +149,10 @@ CI (GitHub Actions) runs typecheck, unit/API tests, the web build, and a Docker 
 
 ## Roadmap (before submission)
 
-- Live payloads checked on 2026-10-13 (describe, recommend, rank, trends, where_popular, demographics, entity_tags). Open: overlap scores bunch at 99-100 because live affinities for the top candidates sit within ~0.01 of each other; `qloo_entity_tags` returns generic tags (payment, price, cuisine) that need filtering to music/audience tags.
+- Done 2026-10-13 on live payloads: fit scores spread across the rank call, tag-family filter, partner category filter, venue fallbacks (ambiguous name, no place demographics, brand signals).
+- Open: the candidate pool can include the headliner's own members or side projects (Radiohead -> Thom Yorke). Qloo has no "member of" field in these results; a promoter has to judge.
+- Open: popularity shows 100 for most well-known acts (percentiles near 1.0); it does not separate them.
+- Open: a public demo deployment (see Deploy).
 - Cross-domain show ideas from the same audience: films, podcasts and brands for theme nights, merch and pre-show playlists.
 - Ask the user to pick when Qloo returns `needs_input` for an ambiguous headliner, instead of only flagging it.
 

@@ -34,9 +34,10 @@ export function briefToMarkdown(brief: Brief, permalink?: string): string {
   L.push(`## ${venue ? "Acts to book" : "Top opener candidates"}`, "");
   if (brief.candidates.length === 0) L.push("No candidates returned.", "");
   else {
-    L.push("| # | Act | Audience overlap (0-100) | Popularity | 90-day trend |", "| - | --- | --- | --- | --- |");
+    L.push("| # | Act | Audience fit (0-100) | Popularity | 90-day trend |", "| - | --- | --- | --- | --- |");
     brief.candidates.forEach((c, i) => L.push(`| ${i + 1} | ${md(c.name)} | ${c.overlapScore} | ${pct(c.popularity)} | ${TREND[c.trend]} |`));
-    L.push("");
+    const n = brief.rankedCount ?? 0;
+    L.push("", `Audience fit: 100 = strongest${n > 1 ? ` of the ${n} acts Qloo ranked` : ""}, 0 = weakest; relative within this brief.`, "");
   }
   if (!venue) L.push(`Headliner trend (90 days): ${TREND[brief.subject.trend]}`, "");
 
@@ -58,6 +59,7 @@ export function briefToMarkdown(brief: Brief, permalink?: string): string {
     row("Age", brief.demographics.age);
     row("Gender", brief.demographics.gender);
     L.push("", "Positive = over-indexed, negative = under-indexed, aggregate only.", "");
+    if (brief.demographicsOf) L.push(`Qloo has no demographics for the venue itself; this is the skew of fans of ${md(brief.demographicsOf)}, the act its crowd likes most.`, "");
   }
   if (brief.tasteTags.length) L.push(`Taste tags: ${brief.tasteTags.map(md).join(", ")}`, "");
 

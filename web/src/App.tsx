@@ -201,7 +201,7 @@ export function App() {
 
           <section className="card span-2">
             <h2>{brief.input.scenario === "venue" ? "Acts to book" : "Top opener candidates"}</h2>
-            <Openers candidates={brief.candidates} />
+            <Openers candidates={brief.candidates} rankedCount={brief.rankedCount} />
           </section>
 
           <section className="card">
@@ -215,6 +215,9 @@ export function App() {
           <section className="card">
             <h2>{brief.input.scenario === "venue" ? "The venue's crowd" : "Audience skew"}</h2>
             <Demographics data={brief.demographics} />
+            {brief.demographicsOf && (
+              <p className="meta">Qloo has no demographics for the venue itself; this is the skew of fans of {brief.demographicsOf}, the act its crowd likes most.</p>
+            )}
             {brief.tasteTags.length > 0 && (
               <p className="tags">{brief.tasteTags.map((t) => <span key={t} className="tag">{t}</span>)}</p>
             )}

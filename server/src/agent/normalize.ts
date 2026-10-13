@@ -105,12 +105,34 @@ export function classifyTrend(values: number[], threshold = 0.03): Trend {
   return "flat";
 }
 
-/** Scales affinities from ONE rank call to 0-100. Scores from different calls are not comparable. */
+/**
+ * Relative fit, 0-100, across ONE rank call: 100 = the strongest act Qloo
+ * ranked, 0 = the weakest of the same call (min-max). Live affinities for a
+ * headliner's neighbours sit within ~0.01 of each other, so a ratio to the
+ * leader shows 99-100 for everyone; the spread is what tells acts apart.
+ * Scores from different calls are not comparable.
+ */
 export function toOverlapScores(affinities: (number | null)[]): number[] {
-  // Score = affinity relative to the strongest candidate in the same call.
-  // No stretching: a candidate at 0.5x the leader's affinity shows 50.
   const valid = affinities.filter((a): a is number => a !== null && a > 0);
   if (valid.length === 0) return affinities.map(() => 0);
   const max = Math.max(...valid);
-  return affinities.map((a) => (a === null || a <= 0 ? 0 : Math.round((a / max) * 100)));
+  const min = Math.min(...valid);
+  return affinities.map((a) => {
+    if (a === null || a <= 0) return 0;
+    return max === min ? 100 : Math.round(((a - min) / (max - min)) * 100);
+  });
+}
+
+export interface TagLike {
+  name: string;
+  type?: string;
+}
+
+/** Tags with their Qloo tag family (e.g. urn:tag:genre:music). */
+export function readTags(results: unknown): TagLike[] {
+  return asArray(results).flatMap((item) => {
+    const r = asRecord(item);
+    if (!r || typeof r.name !== "string") return [];
+    return [{ name: r.name.trim(), type: typeof r.type === "string" ? r.type : undefined }];
+  });
 }

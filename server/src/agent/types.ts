@@ -76,7 +76,7 @@ export type Trend = "rising" | "flat" | "falling" | "unknown";
 export interface Candidate {
   name: string;
   entityId?: string;
-  overlapScore: number; // 0-100, relative within this brief only
+  overlapScore: number; // 0-100 min-max across the acts in one rank call (100 = strongest, 0 = weakest)
   affinity: number | null; // raw Qloo affinity from the rank call
   popularity: number | null;
   trend: Trend;
@@ -111,7 +111,11 @@ export interface Brief {
   heatmapOf: string | null;
   heatmap: HeatPoint[];
   demographics: Demographics | null;
+  /** Whose audience the skew describes when it is not the subject (venue with no Qloo demographics). */
+  demographicsOf: string | null;
   partners: Partner[];
+  /** How many acts the rank call scored (the base of overlapScore). */
+  rankedCount: number;
   tasteTags: string[];
   narrative: string;
   caveats: string[];

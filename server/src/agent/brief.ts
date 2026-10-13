@@ -2,8 +2,8 @@
 // comes from a Qloo result (or the mock); the LLM only writes the narrative.
 
 import type { QlooMode } from "../qloo/types.ts";
-import { readDemographics, readEntities, readHeatmap, readTrends, toOverlapScores } from "./normalize.ts";
-import { latestOfKind } from "./planner.ts";
+import { readDemographics, readEntities, readHeatmap, readTags, readTrends, toOverlapScores } from "./normalize.ts";
+import { isAudienceTag, kindOf, latestOfKind } from "./planner.ts";
 import { subjectOf, type Brief, type BriefInput, type Candidate, type EvidenceItem, type LlmCall, type Partner, type TraceStep } from "./types.ts";
 
 export const TOP_CANDIDATES = 5;
@@ -35,11 +35,12 @@ export function buildBrief(args: {
 
   const rank = latestOfKind(evidence, "rank");
   const fallback = latestOfKind(evidence, "candidates");
-  const pool = readEntities((rank ?? fallback)?.envelope.results)
+  // Scores are spread over every act in the rank call, then the top five shown.
+  const ranked = readEntities((rank ?? fallback)?.envelope.results)
     .filter((e) => !isSubject(e.name))
-    .sort((a, b) => (b.affinity ?? 0) - (a.affinity ?? 0))
-    .slice(0, TOP_CANDIDATES);
-  const scores = toOverlapScores(pool.map((e) => e.affinity));
+    .sort((a, b) => (b.affinity ?? 0) - (a.affinity ?? 0));
+  const scores = toOverlapScores(ranked.map((e) => e.affinity));
+  const pool = ranked.slice(0, TOP_CANDIDATES);
   const popularity = new Map(readEntities(fallback?.envelope.results).map((e) => [e.name, e.popularity]));
   const candidates: Candidate[] = pool.map((e, i) => ({
     name: e.name,
@@ -76,8 +77,11 @@ export function buildBrief(args: {
     heatmapOf: heat && heatPoints.length > 0 ? String(heat.args.entity ?? "") || null : null,
     heatmap: heatPoints,
     demographics: demo ? readDemographics(demo.envelope.results) : null,
+    // Set when the skew describes someone other than the subject (venue fallback to its top act).
+    demographicsOf: demo && demo.args.entity_type === "artist" && subjectInput.type === "place" ? String(demo.args.entity ?? "") || null : null,
     partners: [...partnersOf("places", "place"), ...partnersOf("brands", "brand")],
-    tasteTags: readEntities(tags?.envelope.results).map((t) => t.name).slice(0, 6),
+    rankedCount: ranked.length,
+    tasteTags: [...new Set(readTags(tags?.envelope.results).filter((t) => isAudienceTag(t.type)).map((t) => t.name))].slice(0, 6),
     trace: args.trace,
     llmCalls: args.llmCalls ?? [],
     generatedAt: (args.now ?? new Date()).toISOString(),
@@ -96,8 +100,8 @@ export function templateNarrative(b: BriefCore): string {
   const rising = b.candidates.filter((o) => o.trend === "rising").map((o) => o.name);
   const parts = [
     venue
-      ? `${top.name} has the strongest affinity with the crowd that likes ${b.subject.name} among the ${b.candidates.length} acts scored for ${b.input.city}.`
-      : `${top.name} has the strongest audience affinity with ${b.subject.name} among the ${b.candidates.length} acts scored for ${b.input.city}.`,
+      ? `${top.name} has the strongest affinity with the crowd that likes ${b.subject.name} among the ${b.rankedCount} acts Qloo ranked for ${b.input.city}.`
+      : `${top.name} has the strongest audience affinity with ${b.subject.name} among the ${b.rankedCount} acts Qloo ranked for ${b.input.city}.`,
     rising.length > 0 ? `Rising over the last 90 days: ${rising.join(", ")}.` : "None of the shortlisted acts shows a clear 90-day rise.",
   ];
   if (b.partners.length > 0) parts.push(`${venue ? "Cross-promotion" : "Partnership"} leads with the same audience: ${b.partners.map((p) => p.name).join(", ")}.`);
@@ -109,19 +113,25 @@ export function buildCaveats(b: BriefCore, evidence: EvidenceItem[]): string[] {
   const out: string[] = [];
   if (b.mode === "mock") out.push("DEMO MODE: all names and numbers are synthetic placeholders, not Qloo data.");
   out.push(
-    "Overlap scores are relative to the strongest candidate in this one Qloo call. They are not ticket-sales forecasts or probabilities.",
+    "Fit scores are relative within this one Qloo rank call (100 = strongest act ranked, 0 = weakest). They are not ticket-sales forecasts or probabilities.",
     "Qloo describes aggregate taste affinities. Nothing here says anything about any individual fan.",
     "The brief does not check whether an act is available, affordable, touring nearby, or a good fit on stage.",
     "The map shows where affinity is comparatively strong inside the chosen area, not head counts of fans.",
   );
   if (b.input.scenario === "venue") {
     out.push("The venue's crowd is Qloo's aggregate audience for this place, not your ticket buyers or your mailing list.");
+    if (b.demographicsOf) out.push(`Qloo returned no demographics for the venue itself; the age and gender skew shown is for fans of ${b.demographicsOf}, the act its crowd likes most.`);
     if (b.input.date) out.push(`The date (${b.input.date}) is not a Qloo input: trends cover the 90 days before today, not the night itself.`);
   }
   if (b.input.capacity) out.push(`Capacity (${b.input.capacity}) is not a Qloo input; whether an act can fill it is your call.`);
   for (const e of evidence) {
     if (e.envelope.status === "error") out.push(`${e.tool} failed (${e.envelope.error?.code ?? "UNKNOWN"}); the related section may be missing.`);
-    else if (e.envelope.status === "needs_input") out.push(`${e.tool}: Qloo could not pin down "${String(e.args.entity ?? e.args.signals ?? "")}" unambiguously; check the spelling or pick the intended entity.`);
+    else if (e.envelope.status === "needs_input") {
+      // A later call that resolved the same kind supersedes the ambiguity.
+      const kind = kindOf(e.tool, e.args);
+      if (kind && latestOfKind(evidence, kind)?.envelope.status === "ok") continue;
+      out.push(`${e.tool}: Qloo could not pin down "${String(e.args.entity ?? e.args.signals ?? e.args.entities ?? "")}" unambiguously; check the spelling or pick the intended entity.`);
+    }
     else if (e.envelope.status === "empty") out.push(`${e.tool} returned no results; the related section is empty, not zero.`);
     else if (e.envelope.status === "partial" || e.envelope.status === "degraded") out.push(`${e.tool} came back ${e.envelope.status}: ${e.envelope.summary ?? ""}`.trim());
   }

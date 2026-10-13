@@ -138,6 +138,57 @@ test("venue scenario: same nine evidence kinds, anchored on the venue as a place
   assert.equal(brief.candidates.length, 5);
   assert.ok(brief.caveats.some((c) => c.includes("2026-11-20")));
   assert.ok(brief.caveats.some((c) => c.includes("venue's crowd")));
+  // The crowd's taste vocabulary comes from the top acts, not the venue's amenities.
+  const tags = qloo.calls.find((c) => c.tool === "qloo_entity_tags");
+  assert.equal(tags?.args.entity_type, "artist");
+  assert.deepEqual(tags?.args.entities, brief.candidates.slice(0, 3).map((c) => c.name));
+  const places = qloo.calls.find((c) => c.tool === "qloo_recommend" && c.args.target_type === "place");
+  assert.ok(!(places?.args.include_tags as string[]).some((t) => t.includes("nightclub")));
+});
+
+test("venue on live-like Qloo: ambiguous name retried with city, place demographics and brand fallbacks", async () => {
+  // Reproduces what live Qloo did on 2026-10-13 for Mohawk / SO36.
+  class LiveLike extends MockQlooClient {
+    override async call(tool: Parameters<MockQlooClient["call"]>[0], args: Record<string, unknown>) {
+      if (tool === "qloo_describe" && args.entity === "Test Hall") {
+        this.calls.push({ tool, args });
+        return { operation: "describe", status: "needs_input" as const, results: [], summary: "Choose the intended Qloo entity." };
+      }
+      if (tool === "qloo_audience_demographics" && args.entity_type === "place") {
+        this.calls.push({ tool, args });
+        return { operation: "audience_demographics", status: "ok" as const, results: [] };
+      }
+      if (tool === "qloo_recommend" && args.target_type === "brand" && (args.signals as string[]).some((x) => x.includes("Test Hall"))) {
+        this.calls.push({ tool, args });
+        return { operation: "recommend", status: "error" as const, results: [], error: { code: "QLOO_CONTRACT", retryable: false, recovery: "" } };
+      }
+      return super.call(tool, args);
+    }
+  }
+  const qloo = new LiveLike();
+  const brief = await runAgent({ input: VENUE, qloo, today: TODAY });
+  const describes = qloo.calls.filter((c) => c.tool === "qloo_describe").map((c) => c.args.entity);
+  assert.deepEqual(describes, ["Test Hall", "Test Hall Berlin"]);
+  assert.ok(!brief.caveats.some((c) => c.includes("could not pin down")), brief.caveats.join(" | "));
+  assert.ok(brief.demographics, "falls back to the top act's demographics");
+  assert.equal(brief.demographicsOf, brief.candidates[0]?.name);
+  assert.ok(brief.caveats.some((c) => c.includes("no demographics for the venue")));
+  const brands = qloo.calls.filter((c) => c.tool === "qloo_recommend" && c.args.target_type === "brand");
+  assert.equal(brands.length, 1);
+  assert.equal((brands[0]?.args.signals as string[]).length, 3);
+  assert.ok(brief.partners.some((p) => p.kind === "brand"));
+});
+
+test("brief: partner filter applied, noise tags dropped, fit scores spread", async () => {
+  const qloo = new MockQlooClient();
+  const brief = await runAgent({ input: INPUT, qloo, today: TODAY });
+  const places = qloo.calls.find((c) => c.tool === "qloo_recommend" && c.args.target_type === "place");
+  assert.ok(Array.isArray(places?.args.include_tags));
+  assert.ok(brief.tasteTags.length > 0 && !brief.tasteTags.includes("Mock Card"));
+  assert.ok(brief.rankedCount >= brief.candidates.length);
+  const scores = brief.candidates.map((c) => c.overlapScore);
+  assert.equal(scores[0], 100);
+  assert.deepEqual([...scores].sort((a, b) => b - a), scores);
 });
 
 test("onEvent reports every Qloo and LLM call as start then end, in order", async () => {

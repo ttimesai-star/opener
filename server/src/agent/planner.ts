@@ -4,7 +4,7 @@
 // a few arguments differ.
 
 import type { QlooToolName } from "../qloo/types.ts";
-import { readEntities } from "./normalize.ts";
+import { readDemographics, readEntities } from "./normalize.ts";
 import { subjectOf, type BriefInput, type EvidenceItem } from "./types.ts";
 
 export type EvidenceKind =
@@ -19,6 +19,36 @@ export const REQUIRED_KINDS: readonly EvidenceKind[] = [
 // So: query 180 days, keep the latest 13 weekly points (about 90 days).
 export const TREND_QUERY_DAYS = 180;
 export const TREND_POINTS = 13;
+
+// Unfiltered place recommendations for a city come back as museums, memorials
+// and landmarks (live, Berlin, 2026-10-13). Partners must be businesses a
+// promoter can work with, so the place call is constrained to these Qloo
+// category tags (URNs resolved through the harness on 2026-10-13; union).
+export const PARTNER_PLACE_TAGS: readonly string[] = [
+  "bar", "cocktail_bar", "pub", "brewery", "coffee_shop", "record_store", "clothing_store", "live_music_venue", "nightclub",
+].map((t) => `urn:tag:category:place:${t}`);
+// A venue does not cross-promote with competing rooms. Live, the generic "bar"
+// category pulled in bar-and-concert venues (SO36 -> Badehaus, Schokoladen), so
+// it is dropped too.
+export const VENUE_PARTNER_PLACE_TAGS: readonly string[] = PARTNER_PLACE_TAGS.filter((t) => !/:(bar|live_music_venue|nightclub)$/.test(t));
+
+/** Adds the partner category filter to a place recommendation that has none (LLM or planner). */
+export function withPartnerFilter(input: BriefInput, tool: QlooToolName, args: Record<string, unknown>): Record<string, unknown> {
+  if (tool !== "qloo_recommend" || args.target_type !== "place") return args;
+  if (Array.isArray(args.include_tags) && args.include_tags.length > 0) return args;
+  const tags = input.scenario === "venue" ? VENUE_PARTNER_PLACE_TAGS : PARTNER_PLACE_TAGS;
+  return { ...args, include_tags: [...tags], include_tags_operator: "union" };
+}
+
+// qloo_entity_tags mixes tag families (payment, price, dishes, amenities) with
+// taste concepts. Keep only the families that describe an audience's taste.
+const AUDIENCE_TAG_FAMILIES = [
+  "urn:tag:genre:music", "urn:tag:audience:", "urn:tag:style:qloo", "urn:tag:theme:qloo", "urn:tag:keyword:media",
+];
+export function isAudienceTag(type: string | undefined): boolean {
+  return typeof type === "string" && AUDIENCE_TAG_FAMILIES.some((f) => type.startsWith(f));
+}
+export const TAGS_QUERY_LIMIT = 20;
 
 export interface PlannedStep {
   kind: EvidenceKind;
@@ -66,6 +96,17 @@ export function candidateNames(evidence: EvidenceItem[], subject: string, max = 
   return readEntities(rec.envelope.results).map((e) => e.name).filter((n) => !same(n, subject)).slice(0, max);
 }
 
+/** Qloo ids of the top ranked acts (names where no id came back). */
+export function rankedRefs(evidence: EvidenceItem[], max: number, subject = ""): string[] {
+  const rank = latestOfKind(evidence, "rank") ?? latestOfKind(evidence, "candidates");
+  if (!rank) return [];
+  return readEntities(rank.envelope.results)
+    .filter((e) => !same(e.name, subject))
+    .sort((a, b) => (b.affinity ?? 0) - (a.affinity ?? 0))
+    .map((e) => e.entityId ?? e.name)
+    .slice(0, max);
+}
+
 /** Top names of the rank call; falls back to the recommendation order. */
 export function rankedNames(evidence: EvidenceItem[], max: number, subject = ""): string[] {
   const rank = latestOfKind(evidence, "rank");
@@ -102,6 +143,13 @@ export function nextPlannedStep(input: BriefInput, evidence: EvidenceItem[], tod
 
   if (want("resolve")) {
     return { kind: "resolve", tool: "qloo_describe", args: { entity: s, type }, purpose: `Resolve ${venue ? "the venue" : "the headliner"} to a Qloo entity` };
+  }
+  // Venue names repeat across cities ("Mohawk": Austin, Bend, a college, a park).
+  // When Qloo asks which one, retry once with the city in the name.
+  const qualified = `${s} ${city}`;
+  if (venue && latestOfKind(evidence, "resolve")?.envelope.status === "needs_input"
+    && !evidence.some((e) => e.tool === "qloo_describe" && same(String(e.args.entity ?? ""), qualified))) {
+    return { kind: "resolve", tool: "qloo_describe", args: { entity: qualified, type }, purpose: `"${s}" is ambiguous in Qloo; resolve it with the city` };
   }
   if (want("candidates")) {
     return {
@@ -142,29 +190,53 @@ export function nextPlannedStep(input: BriefInput, evidence: EvidenceItem[], tod
   if (want("demographics")) {
     return {
       kind: "demographics", tool: "qloo_audience_demographics",
-      args: { entity: s, entity_type: type },
+      args: { entity: venue ? ref : s, entity_type: type },
       purpose: venue ? "Aggregate age and gender skew of the venue's crowd" : "Aggregate age and gender skew of the headliner's audience",
+    };
+  }
+  // Live Qloo returns no demographic breakdown for places (SO36, 2026-10-13:
+  // status ok, empty results). Then describe the crowd through the act it
+  // likes most, and the brief says so.
+  const topAct = venue ? rankedNames(evidence, 1, s)[0] : undefined;
+  const demo = latestOfKind(evidence, "demographics");
+  if (venue && topAct && demo && readDemographics(demo.envelope.results) === null
+    && !evidence.some((e) => e.tool === "qloo_audience_demographics" && e.args.entity_type === "artist")) {
+    return {
+      kind: "demographics", tool: "qloo_audience_demographics",
+      args: { entity: topAct, entity_type: "artist" },
+      purpose: `Qloo has no demographics for the venue itself; age and gender skew of fans of ${topAct}, the act its crowd likes most`,
     };
   }
   if (want("places")) {
     return {
       kind: "places", tool: "qloo_recommend",
-      args: { target_type: "place", signals: [ref], filter_location: city, limit: 6 },
+      args: withPartnerFilter(input, "qloo_recommend", { target_type: "place", signals: [ref], filter_location: city, limit: 6 }),
       purpose: venue ? `Other places in ${city} the same crowd likes (cross-promotion leads)` : `Venues, bars and shops in ${city} that the same audience likes (partnership leads)`,
     };
   }
-  if (want("brands")) {
+  // Brand recommendations with a place as the signal fail live (400,
+  // QLOO_CONTRACT), so a venue's sponsor leads come from its top acts' audiences.
+  const brandSignals = venue ? rankedRefs(evidence, 3, s) : [ref];
+  const brandTried = evidence.some((e) => kindOf(e.tool, e.args) === "brands" && JSON.stringify(e.args.signals) === JSON.stringify(brandSignals));
+  if (!have("brands") && !brandTried && brandSignals.length > 0) {
     return {
       kind: "brands", tool: "qloo_recommend",
-      args: { target_type: "brand", signals: [ref], limit: 6 },
+      args: { target_type: "brand", signals: brandSignals, limit: 6 },
       purpose: `Brands with audience affinity to ${venue ? "the venue's crowd" : "the headliner"} (sponsor leads)`,
     };
   }
   if (want("tags")) {
+    // A venue's own tags are amenities and cuisine; its crowd's taste vocabulary
+    // comes from the acts that crowd likes most.
+    const top = venue ? rankedNames(evidence, 3, s) : [];
     return {
       kind: "tags", tool: "qloo_entity_tags",
-      args: { entities: [s], entity_type: type, limit: 6 },
-      purpose: "Taste concepts that characterise the audience (for promo copy)",
+      args: venue && top.length > 0
+        ? { entities: top, entity_type: "artist", limit: TAGS_QUERY_LIMIT }
+        : { entities: [ref], entity_type: type, limit: TAGS_QUERY_LIMIT },
+      purpose: venue && top.length > 0
+        ? "Taste concepts shared by the top acts the venue's crowd likes (for promo copy)"
+        : "Taste concepts that characterise the audience (for promo copy)",
     };
   }
   return null;

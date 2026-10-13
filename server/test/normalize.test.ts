@@ -1,10 +1,51 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { classifyTrend, readDemographics, readEntities, readHeatmap, readTrends, toOverlapScores } from "../src/agent/normalize.ts";
+import { classifyTrend, readDemographics, readEntities, readHeatmap, readTags, readTrends, toOverlapScores } from "../src/agent/normalize.ts";
+import { isAudienceTag, withPartnerFilter, PARTNER_PLACE_TAGS, VENUE_PARTNER_PLACE_TAGS } from "../src/agent/planner.ts";
 
-test("overlap scores are relative to the leader, not stretched", () => {
-  assert.deepEqual(toOverlapScores([0.8, 0.4, null, 0.2]), [100, 50, 0, 25]);
+test("fit scores spread min-max across one rank call", () => {
+  assert.deepEqual(toOverlapScores([0.8, 0.4, null, 0.2]), [100, 33, 0, 0]);
   assert.deepEqual(toOverlapScores([null, null]), [0, 0]);
+  assert.deepEqual(toOverlapScores([0.7, 0.7]), [100, 100]);
+  // Live affinities bunch within ~0.01; the scale must still separate them.
+  const live = [0.9744, 0.9719, 0.9717, 0.9664, 0.9655, 0.9600];
+  const s = toOverlapScores(live);
+  assert.equal(s[0], 100);
+  assert.equal(s[5], 0);
+  assert.ok(s[3]! < 50 && s[1]! > 75, `spread ${s.join(",")}`);
+});
+
+test("audience tags: taste families kept, payment/price/dish/amenity dropped (live 2026-10-13)", () => {
+  const live = readTags([
+    { name: "surrealism", type: "urn:tag:keyword:media" },
+    { name: "VISA", type: "urn:tag:credit_card:place" },
+    { name: "Bar", type: "urn:tag:genre:place" },
+    { name: "Os A Moelle", type: "urn:tag:specialty_dish:place" },
+    { name: "Inexpensive", type: "urn:tag:cost_description:place" },
+    { name: "Two Star", type: "urn:tag:hotel_rating:place" },
+    { name: "Cultivated", type: "urn:tag:audience:qloo" },
+    { name: "Cerebral", type: "urn:tag:style:qloo" },
+    { name: " indie rock", type: "urn:tag:genre:music" },
+    { name: "Musician", type: "urn:tag:genre:person" },
+    { name: "Vegan", type: "urn:tag:dietary_option:qloo" },
+    { name: "no type" },
+  ]);
+  assert.deepEqual(live.filter((t) => isAudienceTag(t.type)).map((t) => t.name), ["surrealism", "Cultivated", "Cerebral", "indie rock"]);
+});
+
+test("partner places are restricted to category tags; venues skip competing rooms", () => {
+  const opener = { scenario: "opener" as const, headliner: "X", city: "Berlin" };
+  const venue = { scenario: "venue" as const, venue: "Hall", city: "Berlin" };
+  const a = withPartnerFilter(opener, "qloo_recommend", { target_type: "place", filter_location: "Berlin" });
+  assert.deepEqual(a.include_tags, PARTNER_PLACE_TAGS);
+  assert.equal(a.include_tags_operator, "union");
+  const v = withPartnerFilter(venue, "qloo_recommend", { target_type: "place" });
+  assert.deepEqual(v.include_tags, VENUE_PARTNER_PLACE_TAGS);
+  assert.ok(!(v.include_tags as string[]).some((t) => t.includes("live_music_venue")));
+  // Explicit tags and other calls are left alone.
+  assert.deepEqual(withPartnerFilter(opener, "qloo_recommend", { target_type: "place", include_tags: ["urn:tag:category:place:pub"] }).include_tags, ["urn:tag:category:place:pub"]);
+  assert.equal(withPartnerFilter(opener, "qloo_recommend", { target_type: "brand" }).include_tags, undefined);
+  assert.equal(withPartnerFilter(opener, "qloo_rank", { target_type: "place" }).include_tags, undefined);
 });
 
 test("trend classification", () => {

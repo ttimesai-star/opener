@@ -201,9 +201,13 @@ export function nextPlannedStep(input: BriefInput, evidence: EvidenceItem[], tod
   const demo = latestOfKind(evidence, "demographics");
   if (venue && topAct && demo && readDemographics(demo.envelope.results) === null
     && !evidence.some((e) => e.tool === "qloo_audience_demographics" && e.args.entity_type === "artist")) {
+    // Pass the act's Qloo id: the harness resolves a bare name by exact match,
+    // and two acts with the same name come back as needs_input.
+    const ranked = latestOfKind(evidence, "rank") ?? latestOfKind(evidence, "candidates");
+    const topActRef = readEntities(ranked?.envelope.results).find((e) => same(e.name, topAct))?.entityId ?? topAct;
     return {
       kind: "demographics", tool: "qloo_audience_demographics",
-      args: { entity: topAct, entity_type: "artist" },
+      args: { entity: topActRef, entity_type: "artist" },
       purpose: `Qloo has no demographics for the venue itself; age and gender skew of fans of ${topAct}, the act its crowd likes most`,
     };
   }

@@ -63,6 +63,7 @@ export function buildBrief(args: {
   const demo = latestOfKind(evidence, "demographics");
   const tags = latestOfKind(evidence, "tags");
   const heatPoints = heat ? readHeatmap(heat.envelope.results) : [];
+  const displayName = (ref: string) => ranked.find((e) => e.entityId === ref)?.name ?? ref;
 
   const partial = {
     input,
@@ -78,7 +79,8 @@ export function buildBrief(args: {
     heatmap: heatPoints,
     demographics: demo ? readDemographics(demo.envelope.results) : null,
     // Set when the skew describes someone other than the subject (venue fallback to its top act).
-    demographicsOf: demo && demo.args.entity_type === "artist" && subjectInput.type === "place" ? String(demo.args.entity ?? "") || null : null,
+    // The fallback call carries the act's Qloo id; show its name.
+    demographicsOf: demo && demo.args.entity_type === "artist" && subjectInput.type === "place" ? displayName(String(demo.args.entity ?? "")) || null : null,
     partners: [...partnersOf("places", "place"), ...partnersOf("brands", "brand")],
     rankedCount: ranked.length,
     tasteTags: [...new Set(readTags(tags?.envelope.results).filter((t) => isAudienceTag(t.type)).map((t) => t.name))].slice(0, 6),

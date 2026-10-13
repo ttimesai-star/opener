@@ -234,3 +234,29 @@ test("venue: an empty rank never produces a trends call with no entities (Jules 
   assert.ok(!calls.includes("qloo_trends"));
   assert.ok(brief.caveats.some((c) => c.includes("qloo_rank returned no results")));
 });
+
+test("venue: top-act demographics fallback passes the act's Qloo id, brief shows its name (Jules review 2026-10-13)", async () => {
+  // Harness 0.1.26 resolves a bare name by exact match; two acts with the same
+  // name come back ambiguous (needs_input). A UUID goes through identifier lookup.
+  class Ambiguous extends MockQlooClient {
+    override async call(tool: Parameters<MockQlooClient["call"]>[0], args: Record<string, unknown>) {
+      if (tool === "qloo_audience_demographics" && args.entity_type === "place") {
+        this.calls.push({ tool, args });
+        return { operation: "audience_demographics", status: "ok" as const, results: [] };
+      }
+      if (tool === "qloo_audience_demographics" && args.entity_type === "artist" && !String(args.entity).startsWith("mock-")) {
+        this.calls.push({ tool, args });
+        return { operation: "audience_demographics", status: "needs_input" as const, results: [], summary: "Choose the intended Qloo entity." };
+      }
+      return super.call(tool, args);
+    }
+  }
+  const qloo = new Ambiguous();
+  const brief = await runAgent({ input: VENUE, qloo, today: TODAY });
+  const artistDemo = qloo.calls.find((c) => c.tool === "qloo_audience_demographics" && c.args.entity_type === "artist");
+  assert.ok(brief.candidates[0]?.entityId, "rank returned an id");
+  assert.equal(artistDemo?.args.entity, brief.candidates[0]?.entityId);
+  assert.ok(brief.demographics, "fallback demographics present");
+  assert.equal(brief.demographicsOf, brief.candidates[0]?.name);
+  assert.ok(!brief.caveats.some((c) => c.includes("mock-")), brief.caveats.join(" | "));
+});

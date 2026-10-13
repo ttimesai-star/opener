@@ -27,20 +27,28 @@ export interface McpClientOptions {
   command?: string; // default "qloo"; on Windows set QLOO_BIN=qloo.cmd
   args?: string[];
   timeoutMs?: number;
+  env?: NodeJS.ProcessEnv; // environment for the harness; default process.env
 }
 
 export class McpQlooClient implements QlooClient {
   readonly mode = "live" as const;
   private client: Client | null = null;
   private connecting: Promise<Client> | null = null;
-  private readonly command: string;
+  readonly command: string;
   private readonly args: string[];
   private readonly timeoutMs: number;
+  private readonly env: NodeJS.ProcessEnv;
 
   constructor(opts: McpClientOptions = {}) {
-    this.command = opts.command ?? process.env.QLOO_BIN ?? (process.platform === "win32" ? "qloo.cmd" : "qloo");
+    this.env = opts.env ?? process.env;
+    this.command = opts.command ?? this.env.QLOO_BIN ?? (process.platform === "win32" ? "qloo.cmd" : "qloo");
     this.args = opts.args ?? ["mcp"];
     this.timeoutMs = opts.timeoutMs ?? 45_000;
+  }
+
+  /** Environment the harness child process starts with. */
+  spawnEnv(): Record<string, string> {
+    return harnessEnv(this.env);
   }
 
   private async connect(): Promise<Client> {
@@ -52,7 +60,7 @@ export class McpQlooClient implements QlooClient {
         const transport = new StdioClientTransport({
           command: this.command,
           args: this.args,
-          env: harnessEnv(),
+          env: this.spawnEnv(),
         });
         const client = new Client({ name: "opener", version: "0.1.0" });
         try {

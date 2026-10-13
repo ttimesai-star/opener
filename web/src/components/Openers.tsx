@@ -19,7 +19,7 @@ export function Openers({ candidates, rankedCount }: { candidates: Brief["candid
       </thead>
       <tbody>
         {candidates.map((o, i) => (
-          <tr key={o.name}>
+          <tr key={`${o.entityId ?? o.name}-${i}`}>
             <td>{i + 1}</td>
             <td>{o.name}</td>
             <td>

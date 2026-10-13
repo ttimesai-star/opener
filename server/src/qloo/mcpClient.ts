@@ -9,6 +9,20 @@ import type { QlooClient, QlooEnvelope, QlooToolName } from "./types.ts";
 
 const INSTALL_HINT = "Cannot start `qloo`. Install it with: npm install --global @qloo/qloo-harness@0.1.26";
 
+// Hackathon keys work only against this host; the harness defaults to
+// api.qloo.com (401 with a hackathon key) and refuses untrusted hosts.
+export const QLOO_HACKATHON_BASE_URL = "https://hackathon.api.qloo.com";
+
+/** Environment for the harness: hackathon endpoint by default, marked trusted. */
+export function harnessEnv(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(env)) if (typeof v === "string") out[k] = v;
+  const base = out.QLOO_BASE_URL?.trim() || QLOO_HACKATHON_BASE_URL;
+  out.QLOO_BASE_URL = base;
+  if (!out.QLOO_TRUSTED_BASE_URL?.trim()) out.QLOO_TRUSTED_BASE_URL = base;
+  return out;
+}
+
 export interface McpClientOptions {
   command?: string; // default "qloo"; on Windows set QLOO_BIN=qloo.cmd
   args?: string[];
@@ -24,7 +38,7 @@ export class McpQlooClient implements QlooClient {
   private readonly timeoutMs: number;
 
   constructor(opts: McpClientOptions = {}) {
-    this.command = opts.command ?? process.env.QLOO_BIN ?? "qloo";
+    this.command = opts.command ?? process.env.QLOO_BIN ?? (process.platform === "win32" ? "qloo.cmd" : "qloo");
     this.args = opts.args ?? ["mcp"];
     this.timeoutMs = opts.timeoutMs ?? 45_000;
   }
@@ -34,11 +48,11 @@ export class McpQlooClient implements QlooClient {
     if (!this.connecting) {
       this.connecting = (async () => {
         // The SDK forwards only a small default env; pass the full environment
-        // so QLOO_API_KEY and QLOO_HOME reach the harness.
+        // so QLOO_API_KEY and QLOO_HOME reach the harness, plus the hackathon endpoint.
         const transport = new StdioClientTransport({
           command: this.command,
           args: this.args,
-          env: process.env as Record<string, string>,
+          env: harnessEnv(),
         });
         const client = new Client({ name: "opener", version: "0.1.0" });
         try {
@@ -73,7 +87,9 @@ export class McpQlooClient implements QlooClient {
         error: { code: "UNKNOWN", retryable: false, recovery: "The tool returned no structured result.", ...raw.error },
       };
     }
-    return { results: [], ...raw } as QlooEnvelope;
+    // qloo_trends returns its payload under `series`; expose it as results.
+    const results = raw.results ?? (Array.isArray(raw.series) ? raw.series : []);
+    return { ...raw, results } as QlooEnvelope;
   }
 
   async close(): Promise<void> {

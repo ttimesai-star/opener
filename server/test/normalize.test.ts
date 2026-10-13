@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { classifyTrend, readDemographics, readEntities, readHeatmap, toOverlapScores } from "../src/agent/normalize.ts";
+import { classifyTrend, readDemographics, readEntities, readHeatmap, readTrends, toOverlapScores } from "../src/agent/normalize.ts";
 
 test("overlap scores are relative to the leader, not stretched", () => {
   assert.deepEqual(toOverlapScores([0.8, 0.4, null, 0.2]), [100, 50, 0, 25]);
@@ -48,4 +48,14 @@ test("heatmap accepts lat/lon and GeoJSON coordinates", () => {
 
 test("demographics wrapped in a demographics object", () => {
   assert.deepEqual(readDemographics({ demographics: { age: { "25_to_29": 0.3 }, gender: {} } }), { age: { "25_to_29": 0.3 }, gender: {} });
+});
+
+test("trends: live points arrive newest first and are classified in date order", () => {
+  const points = [
+    { date: "2026-10-07", population_percentile: 0.6 },
+    { date: "2026-09-30", population_percentile: 0.5 },
+    { date: "2026-09-23", population_percentile: 0.4 },
+    { date: "2026-09-16", population_percentile: 0.3 },
+  ];
+  assert.equal(readTrends([{ entity: { name: "X" }, points }]).get("X"), "rising");
 });

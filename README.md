@@ -18,7 +18,7 @@ The agent calls Qloo's taste tools and returns a booking brief:
 - **Live agent log**: every Qloo and LLM call streams to the page as it happens (Server-Sent Events), with who made it (LLM or planner), status, duration, a one-line result and the request behind it
 - **Share and export**: each brief gets a link (`/b/<id>`), a Markdown download and a print / save-as-PDF layout. Shared briefs live in server memory only and expire (24 h by default)
 
-> Status: scaffold. Until the hackathon API key arrives, the app runs on **synthetic mock data** (fictional names, generated numbers) and says so on screen.
+> Status: runs on live Qloo data (hackathon key, verified 2026-10-13 end to end: all nine evidence calls return `ok`). Without a key the app falls back to **synthetic mock data** (fictional names, generated numbers) and says so on screen.
 
 ## The problem
 
@@ -96,7 +96,9 @@ export QLOO_API_KEY=...        # hackathon key; works only against hackathon.api
 npm start                      # header badge switches to "Live Qloo"
 ```
 
-On Windows set `QLOO_BIN=qloo.cmd`.
+Opener points the harness at `https://hackathon.api.qloo.com` and marks it trusted (`QLOO_BASE_URL` / `QLOO_TRUSTED_BASE_URL`; the harness default `api.qloo.com` answers 401 to a hackathon key). Override `QLOO_BASE_URL` for another endpoint. On Windows the binary defaults to `qloo.cmd` (`QLOO_BIN` overrides it).
+
+Live-data notes: signals carry the entity id from `qloo_describe` (a bare name like "Radiohead" is ambiguous across artist, person and album and comes back `needs_input`); `/v2/trending` returns weekly points newest first, so trends query 180 days and keep the latest 13 points (about 90 days).
 
 ### LLM agent
 
@@ -127,7 +129,7 @@ CI (GitHub Actions) runs typecheck, unit/API tests, the web build, and a Docker 
 
 ## Roadmap (before submission)
 
-- Verify every normalizer against live `qloo mcp` payloads on the first day with a key.
+- Live payloads checked on 2026-10-13 (describe, recommend, rank, trends, where_popular, demographics, entity_tags). Open: overlap scores bunch at 99-100 because live affinities for the top candidates sit within ~0.01 of each other; `qloo_entity_tags` returns generic tags (payment, price, cuisine) that need filtering to music/audience tags.
 - Cross-domain show ideas from the same audience: films, podcasts and brands for theme nights, merch and pre-show playlists.
 - Ask the user to pick when Qloo returns `needs_input` for an ambiguous headliner, instead of only flagging it.
 

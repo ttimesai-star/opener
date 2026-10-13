@@ -14,6 +14,12 @@ export const REQUIRED_KINDS: readonly EvidenceKind[] = [
   "resolve", "candidates", "rank", "trends", "heatmap", "demographics", "places", "brands", "tags",
 ];
 
+// Live /v2/trending returns weekly points, newest first, capped by `limit`, and
+// a 90-day window came back empty on 2026-10-13 while a 180-day one did not.
+// So: query 180 days, keep the latest 13 weekly points (about 90 days).
+export const TREND_QUERY_DAYS = 180;
+export const TREND_POINTS = 13;
+
 export interface PlannedStep {
   kind: EvidenceKind;
   tool: QlooToolName;
@@ -71,6 +77,18 @@ export function rankedNames(evidence: EvidenceItem[], max: number, subject = "")
     .slice(0, max);
 }
 
+/**
+ * The resolved Qloo id of the subject, or its name when unresolved. Live Qloo
+ * reports a bare name such as "Radiohead" as ambiguous (artist, person, album)
+ * and returns needs_input, so signals carry the id from qloo_describe.
+ */
+export function subjectRef(evidence: EvidenceItem[], subject: string): string {
+  const resolved = latestOfKind(evidence, "resolve");
+  if (!resolved || resolved.envelope.status !== "ok") return subject;
+  const hit = readEntities(resolved.envelope.results).find((e) => same(e.name, subject)) ?? readEntities(resolved.envelope.results)[0];
+  return hit?.entityId ?? subject;
+}
+
 export function nextPlannedStep(input: BriefInput, evidence: EvidenceItem[], today = new Date()): PlannedStep | null {
   const have = (k: EvidenceKind) => latestOfKind(evidence, k) !== undefined;
   // A kind that already failed with an error is not retried by the planner.
@@ -80,6 +98,7 @@ export function nextPlannedStep(input: BriefInput, evidence: EvidenceItem[], tod
   const { name: s, type } = subjectOf(input);
   const venue = input.scenario === "venue";
   const city = input.city;
+  const ref = subjectRef(evidence, s);
 
   if (want("resolve")) {
     return { kind: "resolve", tool: "qloo_describe", args: { entity: s, type }, purpose: `Resolve ${venue ? "the venue" : "the headliner"} to a Qloo entity` };
@@ -87,7 +106,7 @@ export function nextPlannedStep(input: BriefInput, evidence: EvidenceItem[], tod
   if (want("candidates")) {
     return {
       kind: "candidates", tool: "qloo_recommend",
-      args: { target_type: "artist", signals: [s], signal_location: city, limit: 12 },
+      args: { target_type: "artist", signals: [ref], signal_location: city, limit: 12 },
       purpose: venue
         ? `Artists whose audiences overlap with the crowd that likes ${s}, weighted to ${city}`
         : `Artists whose audiences overlap with ${s}'s, weighted to ${city}`,
@@ -97,7 +116,7 @@ export function nextPlannedStep(input: BriefInput, evidence: EvidenceItem[], tod
   if (want("rank") && candidates.length > 0) {
     return {
       kind: "rank", tool: "qloo_rank",
-      args: { options: candidates, option_type: "artist", signals: [s], signal_location: city },
+      args: { options: candidates, option_type: "artist", signals: [ref], signal_location: city },
       purpose: "Score the shortlist against one shared profile so scores are comparable",
     };
   }
@@ -106,7 +125,7 @@ export function nextPlannedStep(input: BriefInput, evidence: EvidenceItem[], tod
     const entities = trendEntities;
     return {
       kind: "trends", tool: "qloo_trends",
-      args: { entities, entity_type: "artist", start_date: isoDaysAgo(90, today), end_date: isoDaysAgo(1, today) },
+      args: { entities, entity_type: "artist", start_date: isoDaysAgo(TREND_QUERY_DAYS, today), end_date: isoDaysAgo(1, today), limit: TREND_POINTS },
       purpose: venue ? "Which shortlisted acts are rising over the last 90 days (momentum for the date)" : "Is the headliner and each top candidate rising over the last 90 days?",
     };
   }
@@ -130,14 +149,14 @@ export function nextPlannedStep(input: BriefInput, evidence: EvidenceItem[], tod
   if (want("places")) {
     return {
       kind: "places", tool: "qloo_recommend",
-      args: { target_type: "place", signals: [s], filter_location: city, limit: 6 },
+      args: { target_type: "place", signals: [ref], filter_location: city, limit: 6 },
       purpose: venue ? `Other places in ${city} the same crowd likes (cross-promotion leads)` : `Venues, bars and shops in ${city} that the same audience likes (partnership leads)`,
     };
   }
   if (want("brands")) {
     return {
       kind: "brands", tool: "qloo_recommend",
-      args: { target_type: "brand", signals: [s], limit: 6 },
+      args: { target_type: "brand", signals: [ref], limit: 6 },
       purpose: `Brands with audience affinity to ${venue ? "the venue's crowd" : "the headliner"} (sponsor leads)`,
     };
   }

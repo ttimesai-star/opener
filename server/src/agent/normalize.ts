@@ -80,7 +80,11 @@ export function readTrends(results: unknown): Map<string, Trend> {
     const name = asRecord(r?.entity)?.name;
     if (typeof name !== "string") continue;
     const points = asArray(r?.points).length > 0 ? asArray(r?.points) : asArray(r?.series ?? r?.data);
-    const values = points.flatMap((p) => {
+    // Live /v2/trending returns weekly points newest first; classify in date order.
+    const dated = points.some((p) => typeof asRecord(p)?.date === "string")
+      ? [...points].sort((a, b) => String(asRecord(a)?.date ?? "").localeCompare(String(asRecord(b)?.date ?? "")))
+      : points;
+    const values = dated.flatMap((p) => {
       const pr = asRecord(p);
       const v = num(pr?.population_percentile) ?? num(pr?.popularity) ?? num(pr?.value);
       return v === null ? [] : [v];

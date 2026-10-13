@@ -6,7 +6,7 @@
 import { isQlooTool, type QlooClient, type QlooEnvelope, type QlooToolName } from "../qloo/types.ts";
 import { buildBrief } from "./brief.ts";
 import type { ChatMessage, ChatResult, Llm, ToolSpec } from "./llm.ts";
-import { isoDaysAgo, nextPlannedStep } from "./planner.ts";
+import { isoDaysAgo, nextPlannedStep, TREND_POINTS, TREND_QUERY_DAYS } from "./planner.ts";
 import { TOOL_SPECS } from "./toolSpecs.ts";
 import type { AgentEvent, Brief, BriefInput, EvidenceItem, LlmCall, TraceStep } from "./types.ts";
 
@@ -24,10 +24,11 @@ export interface RunOptions {
 const ALLOWED = new Set(TOOL_SPECS.map((t) => t.function.name));
 
 export function systemPrompt(input: BriefInput, today: Date): string {
-  const window = `start_date=${isoDaysAgo(90, today)}, end_date=${isoDaysAgo(1, today)}`;
+  const window = `start_date=${isoDaysAgo(TREND_QUERY_DAYS, today)}, end_date=${isoDaysAgo(1, today)}, limit=${TREND_POINTS}`;
   const common = [
     "Call Qloo tools; do not answer from your own knowledge.",
-    "If a result has status needs_input, retry with a more specific name once, then move on.",
+    "In signals, pass the entity_id returned by qloo_describe, not the bare name (live Qloo treats bare names as ambiguous).",
+    "If a result has status needs_input, retry with a more specific name or the entity_id once, then move on.",
     "Never infer health, politics, finances or anything about individuals. When done, reply with the single word DONE.",
   ];
   if (input.scenario === "venue") {

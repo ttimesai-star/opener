@@ -35,13 +35,15 @@ test("brief is deterministic for the same input", async () => {
   assert.deepEqual(a.candidates, b.candidates);
 });
 
-test("planner starts with the headliner and uses the 90 days before today for trends", async () => {
+test("planner starts with the headliner and asks for the latest ~90 days of weekly trend points", async () => {
   assert.equal(nextPlannedStep(INPUT, [], TODAY)?.tool, "qloo_describe");
   const qloo = new MockQlooClient();
   await runAgent({ input: INPUT, qloo, today: TODAY });
   const trends = qloo.calls.find((c) => c.tool === "qloo_trends");
-  assert.equal(trends?.args.start_date, "2026-07-12");
+  // 180-day query window (a 90-day one came back empty live), latest 13 weekly points.
+  assert.equal(trends?.args.start_date, "2026-04-13");
   assert.equal(trends?.args.end_date, "2026-10-09");
+  assert.equal(trends?.args.limit, 13);
   assert.equal((trends?.args.entities as string[])[0], INPUT.headliner);
 });
 

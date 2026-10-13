@@ -36,6 +36,7 @@ export const TOOL_SPECS: ToolSpec[] = [
   spec("qloo_trends", "Popularity time series for one to five entities over an ISO date range.", {
     entities: strings("Entity names", 5), entity_type: { type: "string", enum: ENTITY_TYPES },
     start_date: { type: "string", description: "YYYY-MM-DD" }, end_date: { type: "string", description: "YYYY-MM-DD" },
+    limit: { ...limit, description: "Number of latest weekly points" },
   }, ["entities", "entity_type", "start_date", "end_date"]),
   spec("qloo_entity_tags", "Taste concepts (tags) that characterise one or more entities.", {
     entities: strings("Entity names"), entity_type: { type: "string", enum: ENTITY_TYPES }, limit,

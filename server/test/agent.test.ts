@@ -364,9 +364,10 @@ test("trends keyed only by Qloo id still reach the subject and candidates; venue
     call: async (tool, args) => {
       const env = await mock.call(tool, args);
       if (tool !== "qloo_trends") return env;
-      // Live shape: the series echoes the id it was asked for and carries no name.
+      // Live entity shape (2026-10-14): { input, entityId, name, type, match }; name dropped here
+      // so only the id can match.
       const ids = args.entities as string[];
-      const results = (env.results as Array<{ points: unknown[] }>).map((r, i) => ({ points: r.points, entity: { entity_id: ids[i], type: "urn:entity:artist" } }));
+      const results = (env.results as Array<{ points: unknown[] }>).map((r, i) => ({ points: r.points, entity: { input: ids[i], entityId: ids[i], type: "urn:entity:artist", match: "identifier" } }));
       return { ...env, results };
     },
   };

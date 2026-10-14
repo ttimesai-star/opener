@@ -79,7 +79,9 @@ export function readTrends(results: unknown): Map<string, Trend> {
     const r = asRecord(item);
     const entityRec = asRecord(r?.entity);
     const name = entityRec?.name;
-    const id = entityRec?.entity_id;
+    // Live /v2/trending (harness 0.1.26, checked 2026-10-14) echoes the id as
+    // entityId plus the input it was asked for; entity_id is the documented API field.
+    const id = [entityRec?.entity_id, entityRec?.entityId].find((v) => typeof v === "string");
     if (typeof name !== "string" && typeof id !== "string") continue;
     const points = asArray(r?.points).length > 0 ? asArray(r?.points) : asArray(r?.series ?? r?.data);
     // Live /v2/trending returns weekly points newest first; classify in date order.

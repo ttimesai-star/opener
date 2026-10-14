@@ -100,3 +100,11 @@ test("trends: live points arrive newest first and are classified in date order",
   ];
   assert.equal(readTrends([{ entity: { name: "X" }, points }]).get("X"), "rising");
 });
+
+test("trends: live entity shape (entityId, input, match) is keyed by id and by name (live check 2026-10-14)", () => {
+  const points = Array.from({ length: 6 }, (_, i) => ({ date: `2026-10-0${6 - i}`, population_percentile: 0.9 - i * 0.05 }));
+  const id = "70CAE5BF-2F4C-445C-A3E5-4EDACFC3591C";
+  const t = readTrends([{ entity: { input: id, entityId: id, name: "Radiohead", type: "urn:entity:artist", match: "identifier" }, points }]);
+  assert.equal(t.get(id), "rising");
+  assert.equal(t.get("Radiohead"), "rising");
+});

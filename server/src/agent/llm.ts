@@ -13,6 +13,8 @@ export interface ToolCall {
   id: string;
   type: "function";
   function: { name: string; arguments: string };
+  /** Vendor data echoed back to the same vendor only (Gemini 3 thought signatures). */
+  extra_content?: unknown;
 }
 
 export interface ToolSpec {
@@ -35,6 +37,46 @@ interface Provider {
   baseUrl: string;
   apiKey: string;
   model: string;
+}
+
+const STRICT_ID = /^[A-Za-z0-9]{9}$/;
+
+/** Gemini's endpoint wants its own extra_content back; every other provider gets plain OpenAI format. */
+export function keepsVendorFields(baseUrl: string): boolean {
+  return /(^|\.)generativelanguage\.googleapis\.com(\/|$)/.test(baseUrl.replace(/^https?:\/\//, ""));
+}
+
+/**
+ * Plain OpenAI chat messages: only role, content, tool_calls {id, type,
+ * function {name, arguments}} and tool_call_id. A history started on Gemini
+ * carries tool_calls[].extra_content, which Mistral rejects with 422 (live
+ * demo run, 2026-10-14). Mistral also requires tool call ids of exactly nine
+ * letters or digits, so other ids are mapped consistently in assistant calls
+ * and in the tool messages that answer them.
+ */
+export function toStrictMessages(messages: ChatMessage[]): Record<string, unknown>[] {
+  const ids = new Map<string, string>();
+  const used = new Set<string>();
+  for (const m of messages) for (const c of m.tool_calls ?? []) if (STRICT_ID.test(c.id)) used.add(c.id);
+  let n = 0;
+  const idFor = (id: string): string => {
+    if (STRICT_ID.test(id)) return id;
+    const known = ids.get(id);
+    if (known) return known;
+    let out = "";
+    do out = `call${(n++).toString(36).padStart(5, "0")}`; while (used.has(out));
+    ids.set(id, out);
+    used.add(out);
+    return out;
+  };
+  return messages.map((m) => {
+    const out: Record<string, unknown> = { role: m.role, content: m.content ?? (m.tool_calls?.length ? "" : null) };
+    if (m.tool_calls?.length) {
+      out.tool_calls = m.tool_calls.map((c) => ({ id: idFor(c.id), type: "function", function: { name: c.function.name, arguments: c.function.arguments } }));
+    }
+    if (m.role === "tool" && m.tool_call_id !== undefined) out.tool_call_id = idFor(m.tool_call_id);
+    return out;
+  });
 }
 
 export class OpenAiCompatibleLlm implements Llm {
@@ -71,7 +113,7 @@ export class OpenAiCompatibleLlm implements Llm {
     const res = await this.fetchImpl(`${p.baseUrl.replace(/\/$/, "")}/chat/completions`, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${p.apiKey}` },
-      body: JSON.stringify({ model: p.model, messages, temperature: 0.2, ...(tools?.length ? { tools, tool_choice: "auto" } : {}) }),
+      body: JSON.stringify({ model: p.model, messages: keepsVendorFields(p.baseUrl) ? messages : toStrictMessages(messages), temperature: 0.2, ...(tools?.length ? { tools, tool_choice: "auto" } : {}) }),
       signal: AbortSignal.timeout(this.timeoutMs),
     });
     if (!res.ok) {

@@ -62,7 +62,9 @@ export const RATE_LIMIT_COOLDOWN_MS = 120_000;
  */
 export function timeoutSignal(ms: number, reason = `timed out after ${ms} ms`): { signal: AbortSignal; clear: () => void } {
   const ctl = new AbortController();
-  const timer = setTimeout(() => ctl.abort(new Error(reason)), ms);
+  // NaN or a negative delay would fire after 1 ms in Node; treat it as "no time left" explicitly (Jules review 2026-10-15).
+  const delay = Number.isFinite(ms) && ms > 0 ? ms : 0;
+  const timer = setTimeout(() => ctl.abort(new Error(reason)), delay);
   return { signal: ctl.signal, clear: () => clearTimeout(timer) };
 }
 

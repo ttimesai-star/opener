@@ -150,3 +150,40 @@ test("two calls of one kind in a single turn hand over to the planner (call limi
   assert.equal(planTurns, 1);
   assert.ok(brief.caveats.some((c) => c.includes("repeated a call (qloo_describe)")));
 });
+
+test("the narrative gets only the time left until the brief target, and is skipped when too little is left (live 15.10: 63 s)", async () => {
+  let narrativeAsked = 0;
+  const slowPlan: Llm = {
+    async chat(_m: ChatMessage[], tools?: ToolSpec[]): Promise<ChatResult> {
+      if (!tools) { narrativeAsked++; return new Promise(() => {}); }
+      await wait(120);
+      return { content: "DONE", toolCalls: [], provider: "fake" };
+    },
+  };
+  // Target already spent by the plan phase: no narrative call at all.
+  const a = await runAgent({ input: INPUT, qloo: new MockQlooClient(), llm: slowPlan, today: TODAY, sleep: noSleep, briefTargetMs: 100 });
+  assert.equal(narrativeAsked, 0);
+  assert.match(a.llmCalls.at(-1)?.summary ?? "", /^skipped: less than 3 s left of the 0 s brief time target; template shown$/);
+  assert.match(a.narrative, /strongest audience affinity/);
+  // Enough left: the narrative is cut at the target, not at its own 12 s limit.
+  const started = Date.now();
+  const b = await runAgent({ input: INPUT, qloo: new MockQlooClient(), llm: slowPlan, today: TODAY, sleep: noSleep, briefTargetMs: 3_400, narrativeTimeoutMs: 12_000 });
+  const took = Date.now() - started;
+  assert.equal(narrativeAsked, 1);
+  assert.ok(took < 4_500, `took ${took} ms`);
+  assert.equal(b.llmCalls.at(-1)?.phase, "narrative");
+  assert.equal(b.llmCalls.at(-1)?.status, "error");
+});
+
+test("NaN or negative time options fall back to defaults instead of aborting at once (Jules review 2026-10-15)", async () => {
+  const llm: Llm = {
+    async chat(_m: ChatMessage[], tools?: ToolSpec[]): Promise<ChatResult> {
+      if (tools) return { content: "DONE", toolCalls: [], provider: "fake" };
+      await wait(30);
+      return { content: "A readable narrative for the promoter.", toolCalls: [], provider: "fake" };
+    },
+  };
+  const brief = await runAgent({ input: INPUT, qloo: new MockQlooClient(), llm, today: TODAY, sleep: noSleep, briefTargetMs: Number.NaN, narrativeTimeoutMs: -1, llmBudgetMs: Number.NaN });
+  assert.equal(brief.narrative, "A readable narrative for the promoter.");
+  assert.equal(brief.llmCalls.at(-1)?.status, "ok");
+});

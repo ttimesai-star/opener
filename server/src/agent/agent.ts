@@ -4,7 +4,7 @@
 // which the server streams to the page.
 
 import { isQlooTool, type QlooClient, type QlooEnvelope, type QlooToolName } from "../qloo/types.ts";
-import { buildBrief } from "./brief.ts";
+import { buildBrief, trendNote } from "./brief.ts";
 import type { ChatMessage, ChatResult, Llm, ToolSpec } from "./llm.ts";
 import { isoDaysAgo, nextPlannedStep, TREND_POINTS, TREND_QUERY_DAYS, withPartnerFilter } from "./planner.ts";
 import { sanitizeSecrets } from "./redact.ts";
@@ -204,14 +204,16 @@ export async function writeNarrative(llm: Llm, brief: Brief, chat?: (messages: C
   const venue = brief.input.scenario === "venue";
   const facts = {
     scenario: brief.input.scenario,
-    subject: brief.subject, city: brief.input.city, capacity: brief.input.capacity ?? null,
+    // A missing trend is passed as "not checked" / "no trend data", never as a flat line.
+    subject: brief.subject.type === "artist" ? { ...brief.subject, trend: trendNote(brief, brief.subject) } : { ...brief.subject, trend: "not measured for venues" },
+    city: brief.input.city, capacity: brief.input.capacity ?? null,
     date: brief.input.scenario === "venue" ? brief.input.date ?? null : null,
-    scoreSource: brief.scoreSource, candidates: brief.candidates, partners: brief.partners, tasteTags: brief.tasteTags, demographics: brief.demographics, mode: brief.mode,
+    scoreSource: brief.scoreSource, candidates: brief.candidates.map((c) => ({ ...c, trend: trendNote(brief, c) })), partners: brief.partners, tasteTags: brief.tasteTags, demographics: brief.demographics, mode: brief.mode,
   };
   const messages: ChatMessage[] = [
     {
       role: "system",
-      content: `Write a 3-4 sentence booking brief for ${venue ? "a venue deciding whom to book for a free date" : "a concert promoter choosing an opener"}. Use only the facts in the JSON. Do not invent numbers, names, dates or reasons. Fit scores are 0-100 relative within one Qloo call (100 = strongest act, 0 = weakest), not forecasts; never call them percentages. scoreSource names that call: "rank" (Qloo ranked the acts) or "recommend" (the rank call failed and the scores are recommendation affinities; say so and never say Qloo ranked them). Plain English, no hype, no markdown.`,
+      content: `Write a 3-4 sentence booking brief for ${venue ? "a venue deciding whom to book for a free date" : "a concert promoter choosing an opener"}. Use only the facts in the JSON. Do not invent numbers, names, dates or reasons. Fit scores are 0-100 relative within one Qloo call (100 = strongest act, 0 = weakest), not forecasts; never call them percentages. scoreSource names that call: "rank" (Qloo ranked the acts) or "recommend" (the rank call failed and the scores are recommendation affinities; say so and never say Qloo ranked them). A trend of "not checked" or "no trend data" is unknown: never describe such an act as not rising or flat. Plain English, no hype, no markdown.`,
     },
     { role: "user", content: JSON.stringify(facts) },
   ];

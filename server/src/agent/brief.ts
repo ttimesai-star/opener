@@ -116,13 +116,41 @@ export function buildBrief(args: {
 
 type BriefCore = Omit<Brief, "narrative" | "caveats">;
 
+export type TrendNote = Exclude<Trend, "unknown"> | "not checked" | "no trend data";
+
+/**
+ * A measured trend, or why there is none: the act was not in any trends call
+ * that came back ("not checked"), or it was and Qloo had no series for it.
+ */
+export function trendNote(b: Pick<BriefCore, "trace">, act: { name: string; entityId?: string; trend: Trend }): TrendNote {
+  if (act.trend !== "unknown") return act.trend;
+  const asked = new Set(b.trace
+    .filter((s) => s.tool === "qloo_trends" && s.status !== "error")
+    .flatMap((s) => (Array.isArray(s.args.entities) ? s.args.entities.map(String) : [])));
+  return (act.entityId && asked.has(act.entityId)) || asked.has(act.name) ? "no trend data" : "not checked";
+}
+
 export function templateNarrative(b: BriefCore): string {
   const venue = b.input.scenario === "venue";
   if (b.candidates.length === 0) {
     return `No candidates came back for ${b.subject.name} in ${b.input.city}. See the agent log for the status of each call.`;
   }
   const top = b.candidates[0] as Candidate;
-  const rising = b.candidates.filter((o) => o.trend === "rising").map((o) => o.name);
+  const notes = b.candidates.map((o) => ({ name: o.name, note: trendNote(b, o) }));
+  const rising = notes.filter((o) => o.note === "rising").map((o) => o.name);
+  const measured = notes.filter((o) => o.note === "rising" || o.note === "flat" || o.note === "falling");
+  const notChecked = notes.filter((o) => o.note === "not checked").map((o) => o.name);
+  const noData = notes.filter((o) => o.note === "no trend data").map((o) => o.name);
+  const trendParts: string[] = [];
+  if (rising.length > 0) trendParts.push(`Rising over the last 90 days: ${rising.join(", ")}.`);
+  else if (measured.length > 0) {
+    trendParts.push(measured.length === notes.length
+      ? "None of the shortlisted acts shows a clear 90-day rise."
+      : `None of the ${measured.length} acts with trend data shows a clear 90-day rise.`);
+  }
+  // An act without a measured trend is unknown, never "not rising".
+  if (notChecked.length > 0) trendParts.push(notChecked.length === notes.length ? "90-day trends were not checked for the shortlisted acts." : `90-day trend not checked for ${notChecked.join(", ")}.`);
+  if (noData.length > 0) trendParts.push(`Qloo returned no 90-day trend data for ${noData.join(", ")}.`);
   const base = b.scoreSource === "recommend"
     ? `among the ${b.rankedCount} acts Qloo recommended for ${b.input.city} (the rank call failed, so these are recommendation affinities)`
     : `among the ${b.rankedCount} acts Qloo ranked for ${b.input.city}`;
@@ -130,7 +158,7 @@ export function templateNarrative(b: BriefCore): string {
     venue
       ? `${top.name} has the strongest affinity with the crowd that likes ${b.subject.name} ${base}.`
       : `${top.name} has the strongest audience affinity with ${b.subject.name} ${base}.`,
-    rising.length > 0 ? `Rising over the last 90 days: ${rising.join(", ")}.` : "None of the shortlisted acts shows a clear 90-day rise.",
+    ...trendParts,
   ];
   if (b.partners.length > 0) parts.push(`${venue ? "Cross-promotion" : "Partnership"} leads with the same audience: ${b.partners.map((p) => p.name).join(", ")}.`);
   return parts.join(" ");

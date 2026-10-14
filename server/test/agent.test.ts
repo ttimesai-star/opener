@@ -381,3 +381,25 @@ test("trends keyed only by Qloo id still reach the subject and candidates; venue
   assert.ok(heatStep?.purpose?.includes(venueBrief.candidates[0]?.name ?? "?"), heatStep?.purpose);
   assert.ok(!heatStep?.purpose?.includes("mock-"), heatStep?.purpose);
 });
+
+test("LLM narrative facts carry 'not checked' instead of a bare 'unknown' trend (demo run 2026-10-14)", async () => {
+  const mock = new MockQlooClient();
+  const noRank: QlooClient = {
+    mode: "live",
+    close: async () => {},
+    call: async (tool, args) => (tool === "qloo_rank" ? { operation: "rank", status: "error", results: [], error: { code: "QLOO_UPSTREAM", retryable: true, recovery: "" } } : mock.call(tool, args)),
+  };
+  let facts = "";
+  const llm: Llm = {
+    async chat(messages: ChatMessage[], tools?: ToolSpec[]): Promise<ChatResult> {
+      if (tools) return { content: "DONE", toolCalls: [], provider: "fake" };
+      facts = String(messages[1]?.content ?? "");
+      return { content: "ok", toolCalls: [], provider: "fake" };
+    },
+  };
+  await runAgent({ input: INPUT, qloo: noRank, llm, today: TODAY });
+  const parsed = JSON.parse(facts) as { candidates: { trend: string }[]; scoreSource: string };
+  assert.ok(parsed.candidates.length > 0);
+  assert.ok(parsed.candidates.every((c) => c.trend === "not checked"), facts);
+  assert.equal(parsed.scoreSource, "recommend");
+});

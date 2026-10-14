@@ -67,6 +67,8 @@ export class McpQlooClient implements QlooClient {
           await client.connect(transport);
         } catch (error) {
           this.connecting = null;
+          // Do not leave a half-started harness process behind (Jules review 2026-10-15).
+          await transport.close().catch(() => {});
           const code = (error as { code?: string }).code;
           throw code === "ENOENT" ? new Error(INSTALL_HINT) : error;
         }

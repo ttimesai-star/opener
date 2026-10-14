@@ -117,3 +117,36 @@ test("a slow narrative is cut at its time limit and the template narrative is us
   assert.equal(brief.llmCalls.at(-1)?.phase, "narrative");
   assert.equal(brief.llmCalls.at(-1)?.status, "error");
 });
+
+test("an LLM call abandoned at the budget that fails later is not an unhandled rejection (Jules review 2026-10-15)", async () => {
+  const { untilAborted } = await import("../src/agent/agent.ts");
+  const unhandled: unknown[] = [];
+  const onUnhandled = (reason: unknown) => unhandled.push(reason);
+  process.on("unhandledRejection", onUnhandled);
+  try {
+    const ctl = new AbortController();
+    ctl.abort("budget");
+    let fail!: (e: Error) => void;
+    const work = new Promise<never>((_, reject) => { fail = reject; });
+    await assert.rejects(untilAborted(work, ctl.signal), /LLM call stopped/);
+    fail(new Error("late provider error"));
+    await wait(20);
+    assert.deepEqual(unhandled, []);
+  } finally {
+    process.off("unhandledRejection", onUnhandled);
+  }
+});
+
+test("two calls of one kind in a single turn hand over to the planner (call limit counts as a repeat)", async () => {
+  let planTurns = 0;
+  const llm: Llm = {
+    async chat(_m: ChatMessage[], tools?: ToolSpec[]): Promise<ChatResult> {
+      if (!tools) return { content: "Narrative.", toolCalls: [], provider: "fake" };
+      planTurns++;
+      return { content: null, provider: "fake", toolCalls: [call("a", "qloo_describe", { entity: "Test Headliner", type: "artist" }), call("b", "qloo_describe", { entity: "Test Headliner Band", type: "artist" })] };
+    },
+  };
+  const brief = await runAgent({ input: INPUT, qloo: new MockQlooClient(), llm, today: TODAY, sleep: noSleep });
+  assert.equal(planTurns, 1);
+  assert.ok(brief.caveats.some((c) => c.includes("repeated a call (qloo_describe)")));
+});

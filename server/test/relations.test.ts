@@ -154,3 +154,12 @@ test("quotes in caveats start and end on word boundaries (live demo 14.10: '...w
   const r = relationToHeadliner(act("Thom Yorke", full), HEAD);
   assert.equal(r?.kind, "part-of");
 });
+
+test("a cut that already falls right before a word keeps that word", () => {
+  // 40 characters after the match end exactly before "tail": nothing to trim.
+  const text = `vocalist of Radiohead ${"x".repeat(38)} tail words here`;
+  const m = /vocalist of Radiohead/.exec(text);
+  assert.ok(m);
+  const q = quoteAround(text, m.index, m[0].length);
+  assert.ok(q.includes("x".repeat(38)), q);
+});

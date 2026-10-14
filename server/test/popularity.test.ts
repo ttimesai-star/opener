@@ -118,3 +118,9 @@ test("venue scenario keeps the recommendation order and has no co-headline notes
   assert.ok(!brief.caveats.some((c) => c.includes("co-headline")));
   assert.ok(brief.candidates.length > 0);
 });
+
+test("co-headline window is capped at the top half (a top-10% headliner does not make every act a co-headliner)", () => {
+  assert.equal(isCoHeadline(0.3, 0.9), false); // top 70%
+  assert.equal(isCoHeadline(0.6, 0.9), true); // top 40%
+  assert.equal(isCoHeadline(Number.NaN, 0.9), false);
+});

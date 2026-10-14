@@ -130,8 +130,9 @@ export class OpenAiCompatibleLlm implements Llm {
   async chat(messages: ChatMessage[], tools?: ToolSpec[], opts: ChatOptions = {}): Promise<ChatResult> {
     let lastError: unknown;
     const now = this.now();
-    // Providers in a 429 cooldown go last, not away: if every provider is cooling, still try them.
-    const order = [...this.providers].sort((a, b) => Number((this.coolingUntil.get(a.name) ?? 0) > now) - Number((this.coolingUntil.get(b.name) ?? 0) > now));
+    // Providers in a 429 cooldown go last, not away, the one that cools down sooner first; if all are cooling, still try them.
+    const remaining = (p: Provider) => Math.max(0, (this.coolingUntil.get(p.name) ?? 0) - now);
+    const order = [...this.providers].sort((a, b) => remaining(a) - remaining(b));
     for (const p of order) {
       // One bounded retry per provider for transient 5xx (preview models flap); a 429 moves on at once.
       for (let attempt = 0; attempt < 2; attempt++) {

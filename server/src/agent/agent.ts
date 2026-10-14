@@ -109,8 +109,10 @@ function compact(envelope: QlooEnvelope, max = 1800): string {
 }
 
 /** Rejects when the signal aborts, even if the LLM client ignores it (the budget must hold for any Llm). */
-function untilAborted<T>(work: Promise<T>, signal?: AbortSignal): Promise<T> {
+export function untilAborted<T>(work: Promise<T>, signal?: AbortSignal): Promise<T> {
   if (!signal) return work;
+  // The abandoned call may still fail later; observe it so Node does not crash the server on an unhandled rejection (Jules review 2026-10-15).
+  work.catch(() => {});
   const stopped = () => new Error(`LLM call stopped: ${String(signal.reason ?? "time limit")}`);
   if (signal.aborted) return Promise.reject(stopped());
   return new Promise<T>((resolve, reject) => {
@@ -254,6 +256,7 @@ export async function runAgent(opts: RunOptions): Promise<Brief> {
               handover ??= `the LLM repeated a call (${name})`;
             } else if (kindsThisTurn.has(kind) || (llmKindCount.get(kind) ?? 0) >= MAX_LLM_CALLS_PER_KIND) {
               content = JSON.stringify({ status: "error", summary: `Call limit for ${name} (${kind}) reached: at most one per turn and ${MAX_LLM_CALLS_PER_KIND} per run. Move on to the next step.` });
+              handover ??= `the LLM repeated a call (${name})`;
             } else {
               kindsThisTurn.add(kind);
               llmKindCount.set(kind, (llmKindCount.get(kind) ?? 0) + 1);

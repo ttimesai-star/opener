@@ -46,7 +46,8 @@ export function quoteAround(text: string, index: number, length: number): string
     start = space === -1 ? index : start + space + 1;
   }
   let end = Math.min(text.length, index + length + 40);
-  if (end < text.length && /\S/.test(text[end] ?? "")) {
+  // Trim only when the cut falls inside a word (a cut right before a word is already a boundary).
+  if (end < text.length && /\S/.test(text[end] ?? "") && /\S/.test(text[end - 1] ?? "")) {
     const tail = text.slice(index + length, end);
     const space = Math.max(tail.lastIndexOf(" "), tail.lastIndexOf("\n"), tail.lastIndexOf("\t"));
     end = space === -1 ? index + length : index + length + space;

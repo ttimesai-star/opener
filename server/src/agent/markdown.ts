@@ -1,6 +1,7 @@
 // Markdown export of a brief. Names come from Qloo (or the mock), so every
 // value is escaped: a name must not be able to inject links, HTML or table cells.
 
+import { popularityLabel } from "./popularity.ts";
 import type { Brief } from "./types.ts";
 
 /** Escapes Markdown/HTML control characters and flattens whitespace. */
@@ -12,7 +13,7 @@ export function md(text: unknown): string {
 }
 
 const TREND = { rising: "rising", falling: "falling", flat: "flat", unknown: "n/a" } as const;
-const pct = (v: number | null) => (v === null ? "n/a" : `${Math.round(v * 100)}`);
+const pct = (v: number | null | undefined) => md(popularityLabel(v));
 const signed = (v: number) => `${v > 0 ? "+" : ""}${v.toFixed(2)}`;
 
 export function titleOf(brief: Brief): string {
@@ -34,14 +35,14 @@ export function briefToMarkdown(brief: Brief, permalink?: string): string {
   L.push(`## ${venue ? "Acts to book" : "Top opener candidates"}`, "");
   if (brief.candidates.length === 0) L.push("No candidates returned.", "");
   else {
-    L.push("| # | Act | Audience fit (0-100) | Popularity | 90-day trend |", "| - | --- | --- | --- | --- |");
+    L.push("| # | Act | Audience fit (0-100) | Qloo popularity | 90-day trend |", "| - | --- | --- | --- | --- |");
     brief.candidates.forEach((c, i) => L.push(`| ${i + 1} | ${md(c.name)} | ${c.overlapScore} | ${pct(c.popularity)} | ${TREND[c.trend]} |`));
     const n = brief.rankedCount ?? 0;
     const recommended = brief.scoreSource === "recommend";
     const base = n > 1 ? ` of the ${n} acts Qloo ${recommended ? "recommended" : "ranked"}` : "";
     L.push("", `Audience fit: 100 = strongest${base}, 0 = weakest; relative within this brief.${recommended ? " The rank call failed, so scores come from the artist recommendation." : ""}`, "");
   }
-  if (!venue) L.push(`Headliner trend (90 days): ${TREND[brief.subject.trend]}`, "");
+  if (!venue) L.push(`Headliner trend (90 days): ${TREND[brief.subject.trend]}${typeof brief.subject.popularity === "number" ? ` · headliner Qloo popularity: ${pct(brief.subject.popularity)}` : ""}`, "");
 
   L.push("## Where the fans are", "");
   if (brief.heatmap.length === 0) L.push("No geographic data returned.", "");

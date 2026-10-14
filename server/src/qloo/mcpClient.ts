@@ -67,6 +67,8 @@ export class McpQlooClient implements QlooClient {
           await client.connect(transport);
         } catch (error) {
           this.connecting = null;
+          // Do not leave a half-started harness process behind (Jules review 2026-10-15).
+          await transport.close().catch(() => {});
           const code = (error as { code?: string }).code;
           throw code === "ENOENT" ? new Error(INSTALL_HINT) : error;
         }
@@ -79,6 +81,14 @@ export class McpQlooClient implements QlooClient {
       })();
     }
     return this.connecting;
+  }
+
+  /**
+   * Starts `qloo mcp` and connects, without calling the Qloo API. The first
+   * live brief otherwise paid for the spawn: 5-34 s locally on 2026-10-15.
+   */
+  async warmUp(): Promise<void> {
+    await this.connect();
   }
 
   async call(tool: QlooToolName, args: Record<string, unknown>): Promise<QlooEnvelope> {

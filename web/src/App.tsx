@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
-import { getBrief, getHealth, markdownUrl, streamBrief, type Health, type StoredBrief } from "./api.ts";
+import { getBrief, getHealth, markdownUrl, popularityLabel, streamBrief, type Health, type StoredBrief } from "./api.ts";
 import { AgentLog, applyEvent, timelineFromBrief, type TimelineItem } from "./components/AgentLog.tsx";
 import { Demographics } from "./components/Demographics.tsx";
 import { FanMap } from "./components/FanMap.tsx";
@@ -8,6 +8,25 @@ import { Openers } from "./components/Openers.tsx";
 type Scenario = "opener" | "venue";
 
 const PERMALINK = /^\/b\/([A-Za-z0-9_-]{12})\/?$/;
+
+/** YYYY-MM-DD, `days` from today (local date): the example free date is always in the future. */
+function isoInDays(days: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() + days);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+interface Example {
+  label: string;
+  scenario: Scenario;
+  values: () => Record<string, string>;
+}
+
+/** One click fills the form and builds the brief; both inputs resolve on live Qloo (checked 2026-10-13/14). */
+export const EXAMPLES: Example[] = [
+  { label: "Try: Radiohead in Berlin", scenario: "opener", values: () => ({ headliner: "Radiohead", city: "Berlin", capacity: "1200" }) },
+  { label: "Try: fill a free date at Mohawk, Austin", scenario: "venue", values: () => ({ venue: "Mohawk", city: "Austin", date: isoInDays(30) }) },
+];
 
 function briefTitle(b: StoredBrief): string {
   return b.input.scenario === "venue"
@@ -32,6 +51,28 @@ export function App() {
   const [loading, setLoading] = useState(false);
   const [copied, setCopied] = useState(false);
   const abort = useRef<AbortController | null>(null);
+  const formRef = useRef<HTMLFormElement | null>(null);
+  // An example click remounts the form with its values (key) and then submits it once.
+  const [preset, setPreset] = useState<{ n: number; values: Record<string, string> } | null>(null);
+  const pendingSubmit = useRef(false);
+
+  useEffect(() => {
+    if (!preset || !pendingSubmit.current) return;
+    pendingSubmit.current = false;
+    formRef.current?.requestSubmit();
+  }, [preset]);
+
+  function runExample(ex: Example) {
+    pendingSubmit.current = true;
+    setScenario(ex.scenario);
+    setPreset((p) => ({ n: (p?.n ?? 0) + 1, values: ex.values() }));
+  }
+  const pv = (k: string) => preset?.values[k];
+  // A tab switched by hand starts from an empty form, not from the last example's values.
+  function chooseScenario(next: Scenario) {
+    setScenario(next);
+    setPreset(null);
+  }
 
   useEffect(() => {
     void getHealth().then(setHealth);
@@ -103,7 +144,7 @@ export function App() {
     if (e.key !== "ArrowLeft" && e.key !== "ArrowRight" && e.key !== "Home" && e.key !== "End") return;
     e.preventDefault();
     const next: Scenario = e.key === "Home" ? "opener" : e.key === "End" ? "venue" : venue ? "opener" : "venue";
-    setScenario(next);
+    chooseScenario(next);
     document.getElementById(`tab-${next}`)?.focus();
   }
 
@@ -123,41 +164,41 @@ export function App() {
 
       <div className="tabs no-print" role="tablist" aria-label="Booking question">
         <button type="button" role="tab" id="tab-opener" aria-controls="brief-form" aria-selected={!venue} tabIndex={venue ? -1 : 0}
-          className={!venue ? "tab active" : "tab"} onClick={() => setScenario("opener")} onKeyDown={onTabKey}>
+          className={!venue ? "tab active" : "tab"} onClick={() => chooseScenario("opener")} onKeyDown={onTabKey}>
           Find an opener for a headliner
         </button>
         <button type="button" role="tab" id="tab-venue" aria-controls="brief-form" aria-selected={venue} tabIndex={venue ? 0 : -1}
-          className={venue ? "tab active" : "tab"} onClick={() => setScenario("venue")} onKeyDown={onTabKey}>
+          className={venue ? "tab active" : "tab"} onClick={() => chooseScenario("venue")} onKeyDown={onTabKey}>
           Fill a free date at a venue
         </button>
       </div>
 
-      <form key={scenario} id="brief-form" role="tabpanel" aria-labelledby={venue ? "tab-venue" : "tab-opener"}
+      <form key={`${scenario}-${preset?.n ?? 0}`} ref={formRef} id="brief-form" role="tabpanel" aria-labelledby={venue ? "tab-venue" : "tab-opener"}
         className={`card form no-print ${venue ? "form-venue" : ""}`} onSubmit={onSubmit}>
         {venue ? (
           <>
             <label>
               Venue
-              <input name="venue" required maxLength={80} placeholder="e.g. a club or hall you book" />
+              <input name="venue" required maxLength={80} placeholder="e.g. a club or hall you book" defaultValue={pv("venue")} />
             </label>
             <label>
               City
-              <input name="city" required maxLength={80} placeholder="e.g. Berlin" />
+              <input name="city" required maxLength={80} placeholder="e.g. Berlin" defaultValue={pv("city")} />
             </label>
             <label>
               Free date
-              <input name="date" type="date" />
+              <input name="date" type="date" defaultValue={pv("date")} />
             </label>
           </>
         ) : (
           <>
             <label>
               Headliner
-              <input name="headliner" required maxLength={80} placeholder="e.g. an artist you are booking" />
+              <input name="headliner" required maxLength={80} placeholder="e.g. an artist you are booking" defaultValue={pv("headliner")} />
             </label>
             <label>
               City
-              <input name="city" required maxLength={80} placeholder="e.g. Berlin" />
+              <input name="city" required maxLength={80} placeholder="e.g. Berlin" defaultValue={pv("city")} />
             </label>
             <label>
               From
@@ -171,10 +212,17 @@ export function App() {
         )}
         <label>
           Capacity
-          <input name="capacity" type="number" min={1} max={200000} placeholder="optional" />
+          <input name="capacity" type="number" min={1} max={200000} placeholder="optional" defaultValue={pv("capacity")} />
         </label>
         <button type="submit" disabled={loading}>{loading ? "Agent working…" : "Build brief"}</button>
       </form>
+
+      <div className="examples no-print" aria-label="Examples">
+        <span className="meta">Not sure what to type?</span>
+        {EXAMPLES.map((ex) => (
+          <button key={ex.label} type="button" className="ghost" disabled={loading} onClick={() => runExample(ex)}>{ex.label}</button>
+        ))}
+      </div>
 
       {error && <p className="card error" role="alert">{error}</p>}
 
@@ -200,6 +248,7 @@ export function App() {
             <p className="narrative">{brief.narrative}</p>
             <p className="meta">
               {brief.input.scenario === "opener" && <>Headliner trend (90 days): <strong>{brief.subject.trend}</strong> · </>}
+              {brief.input.scenario === "opener" && typeof brief.subject.popularity === "number" && <>headliner Qloo popularity: {popularityLabel(brief.subject.popularity)} · </>}
               {brief.input.capacity ? <>capacity {brief.input.capacity} · </> : null}
               agent: {brief.agent} · data: {brief.mode} · {brief.generatedAt.slice(0, 16).replace("T", " ")} UTC
               {brief.cached ? " · from cache" : ""}

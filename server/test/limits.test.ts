@@ -14,7 +14,7 @@ const recommend = (id: string, limit = 12): ToolCall => ({
   function: { name: "qloo_recommend", arguments: JSON.stringify({ target_type: "artist", signals: [INPUT.headliner], signal_location: "Berlin", limit }) },
 });
 
-test("LLM repeating the same tool: identical calls reuse the first result, a kind is capped per turn and per run (demo run 2026-10-14: 5x recommend -> Qloo 429)", async () => {
+test("LLM repeating the same tool: identical calls reuse the first result, a kind is capped, and the planner takes over at once (demo run 2026-10-14: 5x recommend -> Qloo 429)", async () => {
   const qloo = new MockQlooClient();
   const replies: string[] = [];
   let turn = 0;
@@ -32,8 +32,11 @@ test("LLM repeating the same tool: identical calls reuse the first result, a kin
   const llmRecommends = brief.trace.filter((s) => s.actor === "llm" && s.tool === "qloo_recommend");
   assert.ok(llmRecommends.length <= MAX_LLM_CALLS_PER_KIND, `${llmRecommends.length} recommend calls reached Qloo`);
   assert.equal(qloo.calls.filter((c) => c.tool === "qloo_recommend" && c.args.target_type === "artist").length, llmRecommends.length);
-  assert.ok(replies.some((r) => r.includes("\"duplicate\"")), "LLM not told about the duplicate");
-  assert.ok(replies.some((r) => r.includes("Call limit")), "LLM not told about the limit");
+  // A repeated call hands over to the planner at once: no second LLM turn is paid for (live run 14.10: 3x recommend in a row).
+  assert.equal(turn, 1, "LLM asked again after it repeated a call");
+  assert.equal(replies.length, 0);
+  assert.ok(brief.trace.some((s) => s.actor === "planner"), "planner did not take over");
+  assert.ok(brief.caveats.some((c) => c.includes("the LLM repeated a call (qloo_recommend)")), brief.caveats.join(" | "));
   assert.equal(brief.candidates.length, 5);
 });
 

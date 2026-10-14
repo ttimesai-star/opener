@@ -105,7 +105,8 @@ export interface Brief {
   input: BriefInput;
   mode: QlooMode;
   agent: "llm" | "planner" | "hybrid";
-  subject: { name: string; entityId?: string; type: "artist" | "place"; trend: Trend };
+  /** popularity: Qloo popularity percentile (0-1) of the resolved subject; absent in briefs stored before 2026-10-15. */
+  subject: { name: string; entityId?: string; type: "artist" | "place"; trend: Trend; popularity?: number | null };
   candidates: Candidate[];
   /** Whose fans the map shows: the headliner (opener) or the top candidate (venue). */
   heatmapOf: string | null;

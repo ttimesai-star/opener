@@ -430,3 +430,22 @@ test("weak LLM arguments are repaired: numeric strings, a two-act rank, signal-l
   const brand = qloo.calls.find((c) => c.tool === "qloo_recommend" && c.args.target_type === "brand");
   assert.ok(Array.isArray(brand?.args.signals) && (brand!.args.signals as unknown[]).length > 0);
 });
+
+test("narrative: capacity is not in the facts and the prompt forbids presenting it as a Qloo input (demo 14.10: 'Given the venue capacity of 1200')", async () => {
+  let system = "";
+  let facts = "";
+  const llm: Llm = {
+    async chat(messages: ChatMessage[], tools?: ToolSpec[]): Promise<ChatResult> {
+      if (tools) return { content: "DONE", toolCalls: [], provider: "fake" };
+      system = String(messages[0]?.content ?? "");
+      facts = String(messages[1]?.content ?? "");
+      return { content: "ok", toolCalls: [], provider: "fake" };
+    },
+  };
+  const brief = await runAgent({ input: { ...INPUT, capacity: 1200 }, qloo: new MockQlooClient(), llm, today: TODAY });
+  assert.ok(!("capacity" in (JSON.parse(facts) as Record<string, unknown>)), facts.slice(0, 200));
+  assert.doesNotMatch(facts, /1200/);
+  assert.match(system, /never mention capacity/);
+  // The caveat still tells the reader capacity was not a Qloo input.
+  assert.ok(brief.caveats.some((c) => c.startsWith("Capacity (1200) is not a Qloo input")));
+});

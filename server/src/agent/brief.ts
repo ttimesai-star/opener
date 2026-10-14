@@ -4,6 +4,7 @@
 import type { QlooMode } from "../qloo/types.ts";
 import { readDemographics, readEntities, readHeatmap, readTags, readTrends, toOverlapScores } from "./normalize.ts";
 import { isAudienceTag, isCompetingRoom, kindOf, latestOfKind } from "./planner.ts";
+import { CO_HEADLINE_FACTOR, isCoHeadline, MIN_SUPPORT_ACTS, popularityLabel } from "./popularity.ts";
 import { sanitizeSecrets } from "./redact.ts";
 import { headlinerRelations, type Relation } from "./relations.ts";
 import { subjectOf, type Trend, type Brief, type BriefInput, type Candidate, type EvidenceItem, type LlmCall, type Partner, type TraceStep } from "./types.ts";
@@ -29,6 +30,8 @@ export function buildBrief(args: {
   llmCalls?: LlmCall[];
   narrative?: string;
   now?: Date;
+  /** Why the LLM handed over to the planner early (time budget, repeated call), for the caveats. */
+  handover?: string;
 }): Brief {
   const { input, evidence } = args;
   const subjectInput = subjectOf(input);
@@ -58,18 +61,31 @@ export function buildBrief(args: {
     const r = relations?.of(e);
     if (r) related.set(e.entityId ?? e.name, r);
   }
-  const ranked = scoredActs
+  const popularity = new Map(readEntities(fallback?.envelope.results).map((e) => [e.name, e.popularity]));
+  const popOf = (e: { name: string; popularity: number | null }) => e.popularity ?? popularity.get(e.name) ?? null;
+  const notPart = scoredActs
     .filter((e) => related.get(e.entityId ?? e.name)?.kind !== "part-of")
     .sort((a, b) => (b.affinity ?? 0) - (a.affinity ?? 0));
+  // Opener: an act about as popular as the headliner is a co-headliner, not a support act.
+  // Left out when enough smaller acts remain; otherwise kept and flagged.
+  const headPop = input.scenario === "opener" ? head?.popularity ?? null : null;
+  const co = (e: { name: string; popularity: number | null }) => isCoHeadline(popOf(e), headPop);
+  const dropCoHeadline = notPart.some(co) || recommended.some(co)
+    ? notPart.filter((e) => !co(e)).length >= MIN_SUPPORT_ACTS
+    : false;
+  const ranked = dropCoHeadline ? notPart.filter((e) => !co(e)) : notPart;
+  // Named in the caveats: dropped here or already kept out of the rank call by the planner; or shown and flagged.
+  const coHeadline = dropCoHeadline
+    ? [...new Map([...notPart, ...recommended.filter((e) => related.get(e.entityId ?? e.name)?.kind !== "part-of")].filter(co).map((e) => [e.name.toLowerCase(), e])).values()]
+    : notPart.filter(co);
   const scores = toOverlapScores(ranked.map((e) => e.affinity));
   const pool = ranked.slice(0, TOP_CANDIDATES);
-  const popularity = new Map(readEntities(fallback?.envelope.results).map((e) => [e.name, e.popularity]));
   const candidates: Candidate[] = pool.map((e, i) => ({
     name: e.name,
     entityId: e.entityId,
     overlapScore: scores[i] ?? 0,
     affinity: e.affinity,
-    popularity: e.popularity ?? popularity.get(e.name) ?? null,
+    popularity: popOf(e),
     trend: trendOf(trends, e.entityId, e.name) ?? "unknown",
   }));
 
@@ -114,6 +130,7 @@ export function buildBrief(args: {
       name: subjectName, entityId: head?.entityId, type: subjectInput.type,
       // Qloo trends are queried for artists only; a venue's trend is not measured.
       trend: subjectInput.type === "artist" ? (trendOf(trends, head?.entityId, subjectName, subjectInput.name) ?? "unknown") : "unknown",
+      popularity: head?.popularity ?? null,
     },
     candidates,
     heatmapOf: heatTargetRef ? displayName(heatTargetRef) || null : null,
@@ -135,7 +152,20 @@ export function buildBrief(args: {
     if (r.kind === "part-of") return [`Left out ${r.act}: Qloo describes it as part of ${subjectName} ("${r.quote}"). Members and side projects are not openers.`];
     return shown.has(key) ? [`${r.act}'s Qloo description mentions ${subjectName} ("${r.quote}"); check it is not a member or side project before booking.`] : [];
   });
+  if (headPop !== null && coHeadline.length > 0) {
+    const list = coHeadline.map((e) => `${e.name} (${popularityLabel(popOf(e))})`).join(", ");
+    const why = `Qloo popularity within ${CO_HEADLINE_FACTOR}x of ${subjectName}'s (${popularityLabel(headPop)})`;
+    relationNotes.push(dropCoHeadline
+      ? `Left out as co-headline level, ${why}: ${list}. A support slot needs a smaller act.`
+      : `Shown although at co-headline level, ${why}, because Qloo returned too few smaller acts: ${list}.`);
+  }
+  // The harness has no popularity filter on recommendations: say so when only very popular acts came back.
+  const recommendedPops = readEntities(fallback?.envelope.results).filter((e) => !isSubject(e.name)).map((e) => e.popularity).filter((p): p is number => p !== null);
+  if (input.scenario === "opener" && recommendedPops.length > 0 && Math.min(...recommendedPops) >= 0.99) {
+    relationNotes.push(`Every act Qloo recommended here is in the top 1% by Qloo popularity (the least popular is ${popularityLabel(Math.min(...recommendedPops))}). The Qloo harness has no popularity filter, so smaller local acts do not come up; the shortlist ranks the least popular of them.`);
+  }
   if (competing.length > 0) relationNotes.push(`Left out of the partner leads as competing rooms (music venues, clubs): ${competing.join(", ")}.`);
+  if (args.handover) relationNotes.push(`The scripted planner completed the evidence plan because ${args.handover}.`);
   if (relations?.blind(pool)) relationNotes.push(`Qloo returned no descriptions for the shortlisted acts, so members and side projects of ${subjectName} could not be screened out; check before booking.`);
   return { ...partial, narrative: args.narrative ?? templateNarrative(partial), caveats: buildCaveats(partial, evidence, relationNotes) };
 }

@@ -19,6 +19,12 @@ const server = createApp({
 
 server.listen(port, () => {
   console.log(`opener listening on :${port} (qloo=${qloo.mode}, llm=${llm ? "on" : "off -> scripted planner"})`);
+  // Start the harness now so the first brief does not wait for it; a failure here is retried on the first call.
+  const started = Date.now();
+  qloo.warmUp?.().then(
+    () => console.log(`qloo harness ready in ${Date.now() - started} ms`),
+    (error: Error) => console.warn(`qloo harness warm-up failed (retried on first call): ${error.message}`),
+  );
 });
 
 const shutdown = async () => {

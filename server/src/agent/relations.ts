@@ -35,9 +35,23 @@ function namePattern(name: string): string | null {
   return `(?<![\\p{L}\\p{N}])(?:[Tt]he\\s+)?${escape(bare)}(?![\\p{L}\\p{N}])`;
 }
 
-function quoteAround(text: string, index: number, length: number): string {
-  const start = Math.max(0, index - 40);
-  const end = Math.min(text.length, index + length + 40);
+/**
+ * About 40 characters of context on each side, cut at word boundaries: a cut
+ * mid-word read "...wn as the principal vocalist" in the live demo (14.10).
+ */
+export function quoteAround(text: string, index: number, length: number): string {
+  let start = Math.max(0, index - 40);
+  if (start > 0 && /\S/.test(text[start - 1] ?? "")) {
+    const space = text.slice(start, index).search(/\s/);
+    start = space === -1 ? index : start + space + 1;
+  }
+  let end = Math.min(text.length, index + length + 40);
+  // Trim only when the cut falls inside a word (a cut right before a word is already a boundary).
+  if (end < text.length && /\S/.test(text[end] ?? "") && /\S/.test(text[end - 1] ?? "")) {
+    const tail = text.slice(index + length, end);
+    const space = Math.max(tail.lastIndexOf(" "), tail.lastIndexOf("\n"), tail.lastIndexOf("\t"));
+    end = space === -1 ? index + length : index + length + space;
+  }
   return `${start > 0 ? "..." : ""}${text.slice(start, end).trim()}${end < text.length ? "..." : ""}`;
 }
 

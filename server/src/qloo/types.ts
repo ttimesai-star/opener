@@ -53,6 +53,8 @@ export interface QlooClient {
   readonly mode: QlooMode;
   call(tool: QlooToolName, args: Record<string, unknown>): Promise<QlooEnvelope>;
   close(): Promise<void>;
+  /** Optional: start the transport ahead of the first brief (no Qloo API request). */
+  warmUp?(): Promise<void>;
 }
 
 export function isQlooTool(name: string): name is QlooToolName {

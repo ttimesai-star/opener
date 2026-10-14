@@ -302,14 +302,16 @@ export async function writeNarrative(llm: Llm, brief: Brief, chat?: (messages: C
     scenario: brief.input.scenario,
     // A missing trend is passed as "not checked" / "no trend data", never as a flat line.
     subject: brief.subject.type === "artist" ? { ...brief.subject, trend: trendNote(brief, brief.subject) } : { ...brief.subject, trend: "not measured for venues" },
-    city: brief.input.city, capacity: brief.input.capacity ?? null,
+    // Capacity is left out on purpose: Qloo has no venue-size input, and a narrative that saw
+    // it wrote "Given the venue capacity of 1200..." as if the picks accounted for it (demo 14.10).
+    city: brief.input.city,
     date: brief.input.scenario === "venue" ? brief.input.date ?? null : null,
     scoreSource: brief.scoreSource, candidates: brief.candidates.map((c) => ({ ...c, trend: trendNote(brief, c) })), partners: brief.partners, tasteTags: brief.tasteTags, demographics: brief.demographics, mode: brief.mode,
   };
   const messages: ChatMessage[] = [
     {
       role: "system",
-      content: `Write a 3-4 sentence booking brief for ${venue ? "a venue deciding whom to book for a free date" : "a concert promoter choosing an opener"}. Use only the facts in the JSON. Do not invent numbers, names, dates or reasons. Fit scores are 0-100 relative within one Qloo call (100 = strongest act, 0 = weakest), not forecasts; never call them percentages. scoreSource names that call: "rank" (Qloo ranked the acts) or "recommend" (the rank call failed and the scores are recommendation affinities; say so and never say Qloo ranked them). A trend of "not checked" or "no trend data" is unknown: never describe such an act as not rising or flat. Plain English, no hype, no markdown.`,
+      content: `Write a 3-4 sentence booking brief for ${venue ? "a venue deciding whom to book for a free date" : "a concert promoter choosing an opener"}. Use only the facts in the JSON. Do not invent numbers, names, dates or reasons. Fit scores are 0-100 relative within one Qloo call (100 = strongest act, 0 = weakest), not forecasts; never call them percentages. scoreSource names that call: "rank" (Qloo ranked the acts) or "recommend" (the rank call failed and the scores are recommendation affinities; say so and never say Qloo ranked them). A trend of "not checked" or "no trend data" is unknown: never describe such an act as not rising or flat. Qloo does not take venue capacity, ticket prices, availability or the show date into account: never mention capacity or room size, and never say or imply that the acts fit the room, the date or the budget. Plain English, no hype, no markdown.`,
     },
     { role: "user", content: JSON.stringify(facts) },
   ];

@@ -1,0 +1,20 @@
+# Redeploy the hosted demo on Render after CI passes on main.
+# Render's own autoDeploy needs its GitHub app on the repo; this calls the Render API instead.
+name: deploy-render
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+    branches: [main]
+jobs:
+  deploy:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Render deploy
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+        run: |
+          curl -fsS -X POST "https://api.render.com/v1/services/srv-db7h843bc2fs73f7bpig/deploys" \
+            -H "Authorization: Bearer $RENDER_API_KEY" -H "Content-Type: application/json" \
+            -d '{"clearCache":"do_not_clear"}' -o /dev/null

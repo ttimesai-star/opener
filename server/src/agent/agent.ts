@@ -124,7 +124,8 @@ export function untilAborted<T>(work: Promise<T>, signal?: AbortSignal): Promise
   if (!signal) return work;
   // The abandoned call may still fail later; observe it so Node does not crash the server on an unhandled rejection (Jules review 2026-10-15).
   work.catch(() => {});
-  const stopped = () => new Error(`LLM call stopped: ${String(signal.reason ?? "time limit")}`);
+  const why = () => (signal.reason instanceof Error ? signal.reason.message : String(signal.reason ?? "time limit"));
+  const stopped = () => new Error(`LLM call stopped: ${why()}`);
   if (signal.aborted) return Promise.reject(stopped());
   return new Promise<T>((resolve, reject) => {
     const onAbort = () => reject(stopped());
@@ -145,7 +146,8 @@ function safeEmit(fn: ((e: AgentEvent) => void) | undefined, event: AgentEvent):
 export async function runAgent(opts: RunOptions): Promise<Brief> {
   const { input, qloo } = opts;
   const today = opts.today ?? new Date();
-  const runStarted = Date.now();
+  // Monotonic clock: a wall-clock jump (NTP) must not stretch or cut the brief target (Jules review 2026-10-15).
+  const runStarted = performance.now();
   const maxToolCalls = opts.maxToolCalls ?? 16;
   const evidence: EvidenceItem[] = [];
   const trace: TraceStep[] = [];
@@ -159,8 +161,9 @@ export async function runAgent(opts: RunOptions): Promise<Brief> {
   const llmResults = new Map<string, QlooEnvelope>();
   const llmKindCount = new Map<string, number>();
   const llmKindStatus = new Map<string, QlooEnvelope["status"]>();
-  const llmBudgetMs = opts.llmBudgetMs ?? envMs(process.env.LLM_PLAN_BUDGET_MS, DEFAULT_LLM_BUDGET_MS);
-  const narrativeTimeoutMs = opts.narrativeTimeoutMs ?? envMs(process.env.LLM_NARRATIVE_TIMEOUT_MS, DEFAULT_NARRATIVE_TIMEOUT_MS);
+  // Options and env alike: positive numbers only, else the default (Jules review 2026-10-15).
+  const llmBudgetMs = envMs(String(opts.llmBudgetMs ?? process.env.LLM_PLAN_BUDGET_MS ?? ""), DEFAULT_LLM_BUDGET_MS);
+  const narrativeTimeoutMs = envMs(String(opts.narrativeTimeoutMs ?? process.env.LLM_NARRATIVE_TIMEOUT_MS ?? ""), DEFAULT_NARRATIVE_TIMEOUT_MS);
   /** Why the LLM stopped choosing tools before saying DONE, if it did. */
   let handover: string | undefined;
 
@@ -309,13 +312,13 @@ export async function runAgent(opts: RunOptions): Promise<Brief> {
 
   const agent: Brief["agent"] = llmUsed && plannerUsed ? "hybrid" : llmUsed ? "llm" : "planner";
   const brief = buildBrief({ input, mode: qloo.mode, agent, evidence, trace, llmCalls, now: today, handover: plannerUsed ? handover : undefined });
-  const briefTargetMs = opts.briefTargetMs ?? envMs(process.env.BRIEF_TARGET_MS, DEFAULT_BRIEF_TARGET_MS);
-  const leftMs = runStarted + briefTargetMs - Date.now();
+  const briefTargetMs = envMs(String(opts.briefTargetMs ?? process.env.BRIEF_TARGET_MS ?? ""), DEFAULT_BRIEF_TARGET_MS);
+  const leftMs = runStarted + briefTargetMs - performance.now();
   const narrativeMs = Math.min(narrativeTimeoutMs, leftMs);
   if (opts.llm && leftMs < MIN_NARRATIVE_MS) {
     // Shown in the agent log, not skipped silently.
     const id = ++seq;
-    const call: LlmCall = { phase: "narrative", status: "error", durationMs: 0, summary: `skipped: the ${Math.round(briefTargetMs / 1000)} s brief time target was reached; template shown` };
+    const call: LlmCall = { phase: "narrative", status: "error", durationMs: 0, summary: `skipped: less than ${MIN_NARRATIVE_MS / 1000} s left of the ${Math.round(briefTargetMs / 1000)} s brief time target; template shown` };
     llmCalls.push(call);
     safeEmit(opts.onEvent, { type: "start", seq: id, kind: "llm", phase: "narrative" });
     safeEmit(opts.onEvent, { type: "end", seq: id, kind: "llm", call });

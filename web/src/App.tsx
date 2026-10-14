@@ -201,7 +201,7 @@ export function App() {
 
           <section className="card span-2">
             <h2>{brief.input.scenario === "venue" ? "Acts to book" : "Top opener candidates"}</h2>
-            <Openers candidates={brief.candidates} rankedCount={brief.rankedCount} />
+            <Openers candidates={brief.candidates} rankedCount={brief.rankedCount} scoreSource={brief.scoreSource} />
           </section>
 
           <section className="card">

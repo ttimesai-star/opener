@@ -44,7 +44,9 @@ export function buildBrief(args: {
   const rank = latestOfKind(evidence, "rank");
   const fallback = latestOfKind(evidence, "candidates");
   // Scores are spread over every act in the rank call, then the top five shown.
-  const ranked = readEntities((rank ?? fallback)?.envelope.results)
+  // Without a rank result the recommendation's affinities are used, and the brief says so.
+  const scored = rank ?? fallback;
+  const ranked = readEntities(scored?.envelope.results)
     .filter((e) => !isSubject(e.name))
     .sort((a, b) => (b.affinity ?? 0) - (a.affinity ?? 0));
   const scores = toOverlapScores(ranked.map((e) => e.affinity));
@@ -103,6 +105,7 @@ export function buildBrief(args: {
     demographicsOf: demo && demo.args.entity_type === "artist" && subjectInput.type === "place" ? displayName(String(demo.args.entity ?? "")) || null : null,
     partners: [...partnersOf("places", "place"), ...partnersOf("brands", "brand")],
     rankedCount: ranked.length,
+    scoreSource: candidates.length === 0 ? null : scored === rank ? "rank" : "recommend",
     tasteTags: [...new Set(readTags(tags?.envelope.results).filter((t) => isAudienceTag(t.type)).map((t) => t.name))].slice(0, 6),
     trace: args.trace,
     llmCalls: args.llmCalls ?? [],
@@ -120,10 +123,13 @@ export function templateNarrative(b: BriefCore): string {
   }
   const top = b.candidates[0] as Candidate;
   const rising = b.candidates.filter((o) => o.trend === "rising").map((o) => o.name);
+  const base = b.scoreSource === "recommend"
+    ? `among the ${b.rankedCount} acts Qloo recommended for ${b.input.city} (the rank call failed, so these are recommendation affinities)`
+    : `among the ${b.rankedCount} acts Qloo ranked for ${b.input.city}`;
   const parts = [
     venue
-      ? `${top.name} has the strongest affinity with the crowd that likes ${b.subject.name} among the ${b.rankedCount} acts Qloo ranked for ${b.input.city}.`
-      : `${top.name} has the strongest audience affinity with ${b.subject.name} among the ${b.rankedCount} acts Qloo ranked for ${b.input.city}.`,
+      ? `${top.name} has the strongest affinity with the crowd that likes ${b.subject.name} ${base}.`
+      : `${top.name} has the strongest audience affinity with ${b.subject.name} ${base}.`,
     rising.length > 0 ? `Rising over the last 90 days: ${rising.join(", ")}.` : "None of the shortlisted acts shows a clear 90-day rise.",
   ];
   if (b.partners.length > 0) parts.push(`${venue ? "Cross-promotion" : "Partnership"} leads with the same audience: ${b.partners.map((p) => p.name).join(", ")}.`);
@@ -135,7 +141,9 @@ export function buildCaveats(b: BriefCore, evidence: EvidenceItem[]): string[] {
   const out: string[] = [];
   if (b.mode === "mock") out.push("DEMO MODE: all names and numbers are synthetic placeholders, not Qloo data.");
   out.push(
-    "Fit scores are relative within this one Qloo rank call (100 = strongest act ranked, 0 = weakest). They are not ticket-sales forecasts or probabilities.",
+    b.scoreSource === "recommend"
+      ? "qloo_rank returned no scores, so fit scores are relative within the one Qloo artist recommendation call (100 = strongest act recommended, 0 = weakest). They are not ticket-sales forecasts or probabilities."
+      : "Fit scores are relative within this one Qloo rank call (100 = strongest act ranked, 0 = weakest). They are not ticket-sales forecasts or probabilities.",
     "Qloo describes aggregate taste affinities. Nothing here says anything about any individual fan.",
     "The brief does not check whether an act is available, affordable, touring nearby, or a good fit on stage.",
     "The map shows where affinity is comparatively strong inside the chosen area, not head counts of fans.",
@@ -146,20 +154,22 @@ export function buildCaveats(b: BriefCore, evidence: EvidenceItem[]): string[] {
     if (b.input.date) out.push(`The date (${b.input.date}) is not a Qloo input: trends cover the 90 days before today, not the night itself.`);
   }
   if (b.input.capacity) out.push(`Capacity (${b.input.capacity}) is not a Qloo input; whether an act can fill it is your call.`);
-  for (const e of evidence) {
+  evidence.forEach((e, i) => {
+    const kind = kindOf(e.tool, e.args);
     if (e.envelope.status === "error") {
+      // A later call of the same kind that came back (a retry) supersedes the failure.
+      if (kind && evidence.slice(i + 1).some((later) => kindOf(later.tool, later.args) === kind && later.envelope.status !== "error")) return;
       const detail = (e.envelope.error?.recovery || e.envelope.summary || "").split("\n")[0]?.trim().slice(0, MAX_CAVEAT_DETAIL);
       out.push(`${e.tool} failed (${e.envelope.error?.code ?? "UNKNOWN"}${detail ? `: ${detail}` : ""}); the related section may be missing.`);
     }
     else if (e.envelope.status === "needs_input") {
       // A later call that resolved the same kind supersedes the ambiguity.
-      const kind = kindOf(e.tool, e.args);
-      if (kind && latestOfKind(evidence, kind)?.envelope.status === "ok") continue;
+      if (kind && latestOfKind(evidence, kind)?.envelope.status === "ok") return;
       out.push(`${e.tool}: Qloo could not pin down "${String(e.args.entity ?? e.args.signals ?? e.args.entities ?? "")}" unambiguously; check the spelling or pick the intended entity.`);
     }
     else if (e.envelope.status === "empty") out.push(`${e.tool} returned no results; the related section is empty, not zero.`);
     else if (e.envelope.status === "partial" || e.envelope.status === "degraded") out.push(`${e.tool} came back ${e.envelope.status}: ${e.envelope.summary ?? ""}`.trim());
-  }
+  });
   if (b.llmCalls.some((c) => c.status === "error")) out.push("The LLM was unavailable for part of this run; the scripted planner completed the evidence plan.");
   return [...new Set(out.map((str) => sanitizeSecrets(str)))];
 }

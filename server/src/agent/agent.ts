@@ -206,12 +206,12 @@ export async function writeNarrative(llm: Llm, brief: Brief, chat?: (messages: C
     scenario: brief.input.scenario,
     subject: brief.subject, city: brief.input.city, capacity: brief.input.capacity ?? null,
     date: brief.input.scenario === "venue" ? brief.input.date ?? null : null,
-    candidates: brief.candidates, partners: brief.partners, tasteTags: brief.tasteTags, demographics: brief.demographics, mode: brief.mode,
+    scoreSource: brief.scoreSource, candidates: brief.candidates, partners: brief.partners, tasteTags: brief.tasteTags, demographics: brief.demographics, mode: brief.mode,
   };
   const messages: ChatMessage[] = [
     {
       role: "system",
-      content: `Write a 3-4 sentence booking brief for ${venue ? "a venue deciding whom to book for a free date" : "a concert promoter choosing an opener"}. Use only the facts in the JSON. Do not invent numbers, names, dates or reasons. Fit scores are 0-100 relative within one Qloo rank call (100 = strongest act ranked, 0 = weakest), not forecasts; never call them percentages. Plain English, no hype, no markdown.`,
+      content: `Write a 3-4 sentence booking brief for ${venue ? "a venue deciding whom to book for a free date" : "a concert promoter choosing an opener"}. Use only the facts in the JSON. Do not invent numbers, names, dates or reasons. Fit scores are 0-100 relative within one Qloo call (100 = strongest act, 0 = weakest), not forecasts; never call them percentages. scoreSource names that call: "rank" (Qloo ranked the acts) or "recommend" (the rank call failed and the scores are recommendation affinities; say so and never say Qloo ranked them). Plain English, no hype, no markdown.`,
     },
     { role: "user", content: JSON.stringify(facts) },
   ];

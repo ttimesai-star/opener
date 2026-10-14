@@ -37,7 +37,9 @@ export function briefToMarkdown(brief: Brief, permalink?: string): string {
     L.push("| # | Act | Audience fit (0-100) | Popularity | 90-day trend |", "| - | --- | --- | --- | --- |");
     brief.candidates.forEach((c, i) => L.push(`| ${i + 1} | ${md(c.name)} | ${c.overlapScore} | ${pct(c.popularity)} | ${TREND[c.trend]} |`));
     const n = brief.rankedCount ?? 0;
-    L.push("", `Audience fit: 100 = strongest${n > 1 ? ` of the ${n} acts Qloo ranked` : ""}, 0 = weakest; relative within this brief.`, "");
+    const recommended = brief.scoreSource === "recommend";
+    const base = n > 1 ? ` of the ${n} acts Qloo ${recommended ? "recommended" : "ranked"}` : "";
+    L.push("", `Audience fit: 100 = strongest${base}, 0 = weakest; relative within this brief.${recommended ? " The rank call failed, so scores come from the artist recommendation." : ""}`, "");
   }
   if (!venue) L.push(`Headliner trend (90 days): ${TREND[brief.subject.trend]}`, "");
 

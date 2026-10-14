@@ -114,8 +114,13 @@ export interface Brief {
   /** Whose audience the skew describes when it is not the subject (venue with no Qloo demographics). */
   demographicsOf: string | null;
   partners: Partner[];
-  /** How many acts the rank call scored (the base of overlapScore). */
+  /** How many acts the scoring call returned (the base of overlapScore). */
   rankedCount: number;
+  /**
+   * Which Qloo call the fit scores come from: the rank call, or the artist
+   * recommendation when qloo_rank failed. null when there are no candidates.
+   */
+  scoreSource: "rank" | "recommend" | null;
   tasteTags: string[];
   narrative: string;
   caveats: string[];

@@ -2,9 +2,13 @@ import type { Brief } from "../api.ts";
 
 const TREND_LABEL = { rising: "↑ rising", falling: "↓ falling", flat: "→ flat", unknown: "n/a" } as const;
 
-export function Openers({ candidates, rankedCount }: { candidates: Brief["candidates"]; rankedCount?: number }) {
+export function Openers({ candidates, rankedCount, scoreSource }: { candidates: Brief["candidates"]; rankedCount?: number; scoreSource?: Brief["scoreSource"] }) {
   if (candidates.length === 0) return <p className="meta">No candidates returned. Check the agent log.</p>;
-  const base = rankedCount && rankedCount > 1 ? `of the ${rankedCount} acts Qloo ranked` : "in this Qloo rank call";
+  // Briefs stored before scoreSource existed were scored by the rank call.
+  const recommended = scoreSource === "recommend";
+  const base = rankedCount && rankedCount > 1
+    ? `of the ${rankedCount} acts Qloo ${recommended ? "recommended" : "ranked"}`
+    : recommended ? "in this Qloo recommendation call" : "in this Qloo rank call";
   return (
     <>
     <table className="openers">
@@ -34,7 +38,7 @@ export function Openers({ candidates, rankedCount }: { candidates: Brief["candid
         ))}
       </tbody>
     </table>
-    <p className="meta">Audience fit: 100 = strongest {base}, 0 = weakest. Relative within this brief, not a sales forecast.</p>
+    <p className="meta">Audience fit: 100 = strongest {base}, 0 = weakest. Relative within this brief, not a sales forecast.{recommended ? " The rank call failed, so scores come from the artist recommendation." : ""}</p>
     </>
   );
 }

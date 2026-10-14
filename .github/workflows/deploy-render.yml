@@ -15,6 +15,6 @@ jobs:
         env:
           RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
         run: |
-          curl -fsS -X POST "https://api.render.com/v1/services/srv-db7h843bc2fs73f7bpig/deploys" \
+          curl -fsS --retry 4 --retry-all-errors --retry-delay 15 -X POST "https://api.render.com/v1/services/srv-db7h843bc2fs73f7bpig/deploys" \
             -H "Authorization: Bearer $RENDER_API_KEY" -H "Content-Type: application/json" \
             -d '{"clearCache":"do_not_clear"}' -o /dev/null

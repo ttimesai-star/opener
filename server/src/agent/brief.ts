@@ -4,12 +4,20 @@
 import type { QlooMode } from "../qloo/types.ts";
 import { readDemographics, readEntities, readHeatmap, readTags, readTrends, toOverlapScores } from "./normalize.ts";
 import { isAudienceTag, kindOf, latestOfKind } from "./planner.ts";
-import { subjectOf, type Brief, type BriefInput, type Candidate, type EvidenceItem, type LlmCall, type Partner, type TraceStep } from "./types.ts";
+import { sanitizeSecrets } from "./redact.ts";
+import { subjectOf, type Trend, type Brief, type BriefInput, type Candidate, type EvidenceItem, type LlmCall, type Partner, type TraceStep } from "./types.ts";
 
 export const TOP_CANDIDATES = 5;
 export const TOP_PARTNERS = 3;
 
 const same = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
+
+// Trend series are keyed by name and by Qloo id; the id wins because two acts can share a name.
+const trendOf = (trends: Map<string, Trend>, entityId: string | undefined, ...names: string[]): Trend | undefined =>
+  (entityId ? trends.get(entityId) : undefined) ?? names.map((n) => trends.get(n)).find((t) => t !== undefined);
+
+// Harness recovery text is shown in a caveat; keep it to one short line.
+const MAX_CAVEAT_DETAIL = 200;
 
 export function buildBrief(args: {
   input: BriefInput;
@@ -48,7 +56,7 @@ export function buildBrief(args: {
     overlapScore: scores[i] ?? 0,
     affinity: e.affinity,
     popularity: e.popularity ?? popularity.get(e.name) ?? null,
-    trend: trends.get(e.name) ?? "unknown",
+    trend: trendOf(trends, e.entityId, e.name) ?? "unknown",
   }));
 
   const partnersOf = (kind: "places" | "brands", label: Partner["kind"]): Partner[] => {
@@ -63,7 +71,19 @@ export function buildBrief(args: {
   const demo = latestOfKind(evidence, "demographics");
   const tags = latestOfKind(evidence, "tags");
   const heatPoints = heat ? readHeatmap(heat.envelope.results) : [];
-  const displayName = (ref: string) => ranked.find((e) => e.entityId === ref)?.name ?? ref;
+
+  const displayName = (ref: string): string => {
+    if (!ref) return ref;
+    if (head && (head.entityId === ref || same(head.name, ref))) return head.name;
+    const inRanked = ranked.find((e) => e.entityId === ref || same(e.name, ref));
+    if (inRanked) return inRanked.name;
+    const inFallback = readEntities(fallback?.envelope.results).find((e) => e.entityId === ref || same(e.name, ref));
+    if (inFallback) return inFallback.name;
+    if (same(subjectInput.name, ref)) return subjectInput.name;
+    return ref;
+  };
+
+  const heatTargetRef = heat && heatPoints.length > 0 ? String(heat.args.entity ?? "") : "";
 
   const partial = {
     input,
@@ -72,10 +92,10 @@ export function buildBrief(args: {
     subject: {
       name: subjectName, entityId: head?.entityId, type: subjectInput.type,
       // Qloo trends are queried for artists only; a venue's trend is not measured.
-      trend: subjectInput.type === "artist" ? (trends.get(subjectName) ?? trends.get(subjectInput.name) ?? "unknown") : "unknown",
+      trend: subjectInput.type === "artist" ? (trendOf(trends, head?.entityId, subjectName, subjectInput.name) ?? "unknown") : "unknown",
     },
     candidates,
-    heatmapOf: heat && heatPoints.length > 0 ? String(heat.args.entity ?? "") || null : null,
+    heatmapOf: heatTargetRef ? displayName(heatTargetRef) || null : null,
     heatmap: heatPoints,
     demographics: demo ? readDemographics(demo.envelope.results) : null,
     // Set when the skew describes someone other than the subject (venue fallback to its top act).
@@ -127,7 +147,10 @@ export function buildCaveats(b: BriefCore, evidence: EvidenceItem[]): string[] {
   }
   if (b.input.capacity) out.push(`Capacity (${b.input.capacity}) is not a Qloo input; whether an act can fill it is your call.`);
   for (const e of evidence) {
-    if (e.envelope.status === "error") out.push(`${e.tool} failed (${e.envelope.error?.code ?? "UNKNOWN"}); the related section may be missing.`);
+    if (e.envelope.status === "error") {
+      const detail = (e.envelope.error?.recovery || e.envelope.summary || "").split("\n")[0]?.trim().slice(0, MAX_CAVEAT_DETAIL);
+      out.push(`${e.tool} failed (${e.envelope.error?.code ?? "UNKNOWN"}${detail ? `: ${detail}` : ""}); the related section may be missing.`);
+    }
     else if (e.envelope.status === "needs_input") {
       // A later call that resolved the same kind supersedes the ambiguity.
       const kind = kindOf(e.tool, e.args);
@@ -138,5 +161,5 @@ export function buildCaveats(b: BriefCore, evidence: EvidenceItem[]): string[] {
     else if (e.envelope.status === "partial" || e.envelope.status === "degraded") out.push(`${e.tool} came back ${e.envelope.status}: ${e.envelope.summary ?? ""}`.trim());
   }
   if (b.llmCalls.some((c) => c.status === "error")) out.push("The LLM was unavailable for part of this run; the scripted planner completed the evidence plan.");
-  return [...new Set(out)];
+  return [...new Set(out.map((str) => sanitizeSecrets(str)))];
 }

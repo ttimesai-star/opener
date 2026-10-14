@@ -168,7 +168,7 @@ export function nextPlannedStep(input: BriefInput, evidence: EvidenceItem[], tod
       purpose: "Score the shortlist against one shared profile so scores are comparable",
     };
   }
-  const trendEntities = venue ? rankedNames(evidence, 5, s) : [s, ...rankedNames(evidence, 4, s)];
+  const trendEntities = venue ? rankedRefs(evidence, 5, s) : [ref, ...rankedRefs(evidence, 4, s)];
   if (want("trends") && have("rank") && trendEntities.length > 0) {
     const entities = trendEntities;
     return {
@@ -179,12 +179,13 @@ export function nextPlannedStep(input: BriefInput, evidence: EvidenceItem[], tod
   }
   // Venue: whose fans to map is the top candidate's, so the room can see whether
   // that act's audience lives near it. Needs a candidate first.
-  const mapTarget = venue ? rankedNames(evidence, 1, s)[0] : s;
+  const mapTarget = venue ? rankedRefs(evidence, 1, s)[0] : ref;
   if (want("heatmap") && mapTarget) {
     return {
       kind: "heatmap", tool: "qloo_where_popular",
       args: { entity: mapTarget, entity_type: "artist", within: city, limit: 15 },
-      purpose: venue ? `Where in ${city} the fans of the top candidate (${mapTarget}) are concentrated` : `Where in ${city} the headliner's affinity is concentrated`,
+      // The purpose is shown in the agent log: name the act, not its Qloo id.
+      purpose: venue ? `Where in ${city} the fans of the top candidate (${rankedNames(evidence, 1, s)[0] ?? mapTarget}) are concentrated` : `Where in ${city} the headliner's affinity is concentrated`,
     };
   }
   if (want("demographics")) {
@@ -232,7 +233,7 @@ export function nextPlannedStep(input: BriefInput, evidence: EvidenceItem[], tod
   if (want("tags")) {
     // A venue's own tags are amenities and cuisine; its crowd's taste vocabulary
     // comes from the acts that crowd likes most.
-    const top = venue ? rankedNames(evidence, 3, s) : [];
+    const top = venue ? rankedRefs(evidence, 3, s) : [];
     return {
       kind: "tags", tool: "qloo_entity_tags",
       args: venue && top.length > 0

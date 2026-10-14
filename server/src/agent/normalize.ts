@@ -72,13 +72,15 @@ export function readDemographics(results: unknown): Demographics | null {
   return { age: clean(age), gender: clean(gender) };
 }
 
-/** Series of { entity, points[] } -> trend label per entity name. */
+/** Series of { entity, points[] } -> trend label per entity name and entity_id. */
 export function readTrends(results: unknown): Map<string, Trend> {
   const out = new Map<string, Trend>();
   for (const item of asArray(results)) {
     const r = asRecord(item);
-    const name = asRecord(r?.entity)?.name;
-    if (typeof name !== "string") continue;
+    const entityRec = asRecord(r?.entity);
+    const name = entityRec?.name;
+    const id = entityRec?.entity_id;
+    if (typeof name !== "string" && typeof id !== "string") continue;
     const points = asArray(r?.points).length > 0 ? asArray(r?.points) : asArray(r?.series ?? r?.data);
     // Live /v2/trending returns weekly points newest first; classify in date order.
     const dated = points.some((p) => typeof asRecord(p)?.date === "string")
@@ -89,7 +91,9 @@ export function readTrends(results: unknown): Map<string, Trend> {
       const v = num(pr?.population_percentile) ?? num(pr?.popularity) ?? num(pr?.value);
       return v === null ? [] : [v];
     });
-    out.set(name, classifyTrend(values));
+    const trend = classifyTrend(values);
+    if (typeof name === "string") out.set(name, trend);
+    if (typeof id === "string") out.set(id, trend);
   }
   return out;
 }

@@ -7,6 +7,7 @@ import { isQlooTool, type QlooClient, type QlooEnvelope, type QlooToolName } fro
 import { buildBrief } from "./brief.ts";
 import type { ChatMessage, ChatResult, Llm, ToolSpec } from "./llm.ts";
 import { isoDaysAgo, nextPlannedStep, TREND_POINTS, TREND_QUERY_DAYS, withPartnerFilter } from "./planner.ts";
+import { sanitizeSecrets } from "./redact.ts";
 import { TOOL_SPECS } from "./toolSpecs.ts";
 import type { AgentEvent, Brief, BriefInput, EvidenceItem, LlmCall, TraceStep } from "./types.ts";
 
@@ -69,7 +70,8 @@ function userMessage(input: BriefInput): string {
 
 function compact(envelope: QlooEnvelope, max = 1800): string {
   const slim = { status: envelope.status, summary: envelope.summary, results: envelope.results, error: envelope.error, warnings: envelope.warnings };
-  const text = JSON.stringify(slim);
+  // Tool results go to a third-party LLM; never send it the Qloo key.
+  const text = sanitizeSecrets(JSON.stringify(slim));
   return text.length > max ? `${text.slice(0, max)}...[truncated]` : text;
 }
 
@@ -103,13 +105,13 @@ export async function runAgent(opts: RunOptions): Promise<Brief> {
     try {
       envelope = await qloo.call(tool, args);
     } catch (error) {
-      envelope = { operation: tool, status: "error", results: [], summary: (error as Error).message, error: { code: "CLIENT", retryable: false, recovery: "See server log." } };
+      envelope = { operation: tool, status: "error", results: [], summary: sanitizeSecrets((error as Error).message), error: { code: "CLIENT", retryable: false, recovery: "See server log." } };
     }
     evidence.push({ tool, args, envelope, purpose });
     const step: TraceStep = {
       index: trace.length + 1, actor, tool, args, purpose,
       status: envelope.status,
-      summary: envelope.summary ?? `${envelope.result_count ?? 0} result(s)`,
+      summary: envelope.summary !== undefined ? sanitizeSecrets(envelope.summary) : `${envelope.result_count ?? 0} result(s)`,
       durationMs: Date.now() - started,
       endpoint: envelope.provenance?.endpoint,
       requests: envelope.provenance?.requests,
@@ -136,7 +138,7 @@ export async function runAgent(opts: RunOptions): Promise<Brief> {
       return res;
     } catch (error) {
       // Error text from providers can echo request details; keep only the first line, trimmed.
-      const call: LlmCall = { phase, status: "error", durationMs: Date.now() - started, summary: (error as Error).message.split("\n")[0]?.slice(0, 160) ?? "error" };
+      const call: LlmCall = { phase, status: "error", durationMs: Date.now() - started, summary: sanitizeSecrets((error as Error).message.split("\n")[0] ?? "").slice(0, 160) || "error" };
       llmCalls.push(call);
       safeEmit(opts.onEvent, { type: "end", seq: id, kind: "llm", call });
       throw error;

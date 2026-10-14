@@ -398,10 +398,10 @@ test("LLM narrative facts carry 'not checked' instead of a bare 'unknown' trend 
     },
   };
   await runAgent({ input: INPUT, qloo: noRank, llm, today: TODAY });
-  const parsed = JSON.parse(facts) as { candidates: { trend: string }[]; scoreSource: string };
+  const parsed = JSON.parse(facts) as { candidates: { trend: string }[]; scoredBy: string };
   assert.ok(parsed.candidates.length > 0);
   assert.ok(parsed.candidates.every((c) => c.trend === "not checked"), facts);
-  assert.equal(parsed.scoreSource, "recommend");
+  assert.equal(parsed.scoredBy, "recommend");
 });
 
 test("weak LLM arguments are repaired: numeric strings, a two-act rank, signal-less partner calls (live Llama run 2026-10-14)", async () => {

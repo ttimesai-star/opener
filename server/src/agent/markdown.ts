@@ -2,6 +2,7 @@
 // value is escaped: a name must not be able to inject links, HTML or table cells.
 
 import { popularityLabel } from "./popularity.ts";
+import { withCity } from "./titles.ts";
 import type { Brief } from "./types.ts";
 
 /** Escapes Markdown/HTML control characters and flattens whitespace. */
@@ -18,7 +19,7 @@ const signed = (v: number) => `${v > 0 ? "+" : ""}${v.toFixed(2)}`;
 
 export function titleOf(brief: Brief): string {
   return brief.input.scenario === "venue"
-    ? `Booking brief: ${brief.subject.name}, ${brief.input.city}${brief.input.date ? `, ${brief.input.date}` : ""}`
+    ? `Booking brief: ${withCity(brief.subject.name, brief.input.city)}${brief.input.date ? `, ${brief.input.date}` : ""}`
     : `Opener brief: ${brief.subject.name} in ${brief.input.city}`;
 }
 

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
-import { getBrief, getHealth, markdownUrl, popularityLabel, streamBrief, type Health, type StoredBrief } from "./api.ts";
+import { getBrief, getHealth, markdownUrl, popularityLabel, streamBrief, withCity, type Health, type StoredBrief } from "./api.ts";
 import { AgentLog, applyEvent, timelineFromBrief, type TimelineItem } from "./components/AgentLog.tsx";
 import { Demographics } from "./components/Demographics.tsx";
 import { FanMap } from "./components/FanMap.tsx";
@@ -30,7 +30,7 @@ export const EXAMPLES: Example[] = [
 
 function briefTitle(b: StoredBrief): string {
   return b.input.scenario === "venue"
-    ? `${b.subject.name}, ${b.input.city}${b.input.date ? ` · ${b.input.date}` : ""}: whom to book`
+    ? `${withCity(b.subject.name, b.input.city)}${b.input.date ? ` · ${b.input.date}` : ""}: whom to book`
     : `Openers for ${b.subject.name} in ${b.input.city}`;
 }
 

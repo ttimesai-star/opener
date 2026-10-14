@@ -55,6 +55,17 @@ export const DEFAULT_LLM_CALL_TIMEOUT_MS = 20_000;
  */
 export const RATE_LIMIT_COOLDOWN_MS = 120_000;
 
+/**
+ * An abort signal that fires after `ms`, on a normal (ref'd) timer. AbortSignal.timeout()
+ * uses an unref'd timer: on Node 22 a run waiting only on it ended with the promise still
+ * pending (CI, 2026-10-15). Call clear() once the work is done.
+ */
+export function timeoutSignal(ms: number, reason = `timed out after ${ms} ms`): { signal: AbortSignal; clear: () => void } {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(new Error(reason)), ms);
+  return { signal: ctl.signal, clear: () => clearTimeout(timer) };
+}
+
 /** Positive integer from env, else the default. */
 export function envMs(value: string | undefined, fallback: number): number {
   const n = Number(value);
@@ -146,12 +157,21 @@ export class OpenAiCompatibleLlm implements Llm {
   }
 
   private async chatWith(p: Provider, messages: ChatMessage[], tools?: ToolSpec[], signal?: AbortSignal): Promise<ChatResult> {
-    const timeout = AbortSignal.timeout(this.timeoutMs);
+    // The timer covers the whole request including the body read.
+    const timeout = timeoutSignal(this.timeoutMs, `${p.name} LLM timed out after ${this.timeoutMs} ms`);
+    try {
+      return await this.request(p, messages, tools, signal ? AbortSignal.any([timeout.signal, signal]) : timeout.signal);
+    } finally {
+      timeout.clear();
+    }
+  }
+
+  private async request(p: Provider, messages: ChatMessage[], tools: ToolSpec[] | undefined, signal: AbortSignal): Promise<ChatResult> {
     const res = await this.fetchImpl(`${p.baseUrl.replace(/\/$/, "")}/chat/completions`, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${p.apiKey}` },
       body: JSON.stringify({ model: p.model, messages: keepsVendorFields(p.baseUrl) ? messages : toStrictMessages(messages), temperature: 0.2, ...(tools?.length ? { tools, tool_choice: "auto" } : {}) }),
-      signal: signal ? AbortSignal.any([timeout, signal]) : timeout,
+      signal,
     });
     if (!res.ok) {
       const detail = (await res.text().catch(() => "")).replace(/\s+/g, " ").slice(0, 200);

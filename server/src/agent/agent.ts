@@ -5,7 +5,7 @@
 
 import { isQlooTool, type QlooClient, type QlooEnvelope, type QlooToolName } from "../qloo/types.ts";
 import { buildBrief, trendNote } from "./brief.ts";
-import { envMs, type ChatMessage, type ChatResult, type Llm, type ToolSpec } from "./llm.ts";
+import { envMs, timeoutSignal, type ChatMessage, type ChatResult, type Llm, type ToolSpec } from "./llm.ts";
 import { isoDaysAgo, kindOf, nextPlannedStep, repairLlmArgs, TREND_POINTS, TREND_QUERY_DAYS, withPartnerFilter } from "./planner.ts";
 import { sanitizeSecrets } from "./redact.ts";
 import { TOOL_SPECS } from "./toolSpecs.ts";
@@ -286,10 +286,11 @@ export async function runAgent(opts: RunOptions): Promise<Brief> {
   const agent: Brief["agent"] = llmUsed && plannerUsed ? "hybrid" : llmUsed ? "llm" : "planner";
   const brief = buildBrief({ input, mode: qloo.mode, agent, evidence, trace, llmCalls, now: today, handover: plannerUsed ? handover : undefined });
   if (opts.llm) {
-    const narrative = await writeNarrative(opts.llm, brief, (m) => askLlm(opts.llm as Llm, "narrative", m, undefined, AbortSignal.timeout(narrativeTimeoutMs))).catch((error: Error) => {
+    const limit = timeoutSignal(narrativeTimeoutMs, `narrative time limit of ${Math.round(narrativeTimeoutMs / 1000)} s`);
+    const narrative = await writeNarrative(opts.llm, brief, (m) => askLlm(opts.llm as Llm, "narrative", m, undefined, limit.signal)).catch((error: Error) => {
       console.warn(`LLM narrative failed, using template: ${error.message}`);
       return null;
-    });
+    }).finally(limit.clear);
     if (narrative) brief.narrative = narrative;
   }
   return brief;

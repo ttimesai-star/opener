@@ -33,6 +33,17 @@ export const PARTNER_PLACE_TAGS: readonly string[] = [
 // it is dropped too.
 export const VENUE_PARTNER_PLACE_TAGS: readonly string[] = PARTNER_PLACE_TAGS.filter((t) => !/:(bar|live_music_venue|nightclub)$/.test(t));
 
+// The tag filter is a union, so a room tagged both "pub" and "nightclub" still
+// comes back: live, Antone's Nightclub was offered to Mohawk as a partner
+// (2026-10-14). Harness results carry no tags, so a venue's partner leads are
+// screened again by name and Qloo description.
+const COMPETING_ROOM = /\b(?:night\s?clubs?|(?:live[- ])?music\s+venues?|concert\s+(?:halls?|venues?)|music\s+halls?|live[- ]music|amphitheat(?:er|re)s?|ballrooms?|opera\s+house|auditorium|arenas?|(?:blues|jazz|rock|dance|comedy|music|techno|punk|live|hip[- ]hop)\s+clubs?|disco(?:th[eè]que)?s?|(?:event|music|concert|live|performance)\s+(?:space|venue)s?|venues?)\b/i;
+
+/** True for places that compete with a venue for the same shows (music venues, nightclubs, concert halls). */
+export function isCompetingRoom(e: EntityLike): boolean {
+  return COMPETING_ROOM.test(`${e.name} ${e.description ?? ""}`);
+}
+
 /** Adds the partner category filter to a place recommendation that has none (LLM or planner). */
 export function withPartnerFilter(input: BriefInput, tool: QlooToolName, args: Record<string, unknown>): Record<string, unknown> {
   if (tool !== "qloo_recommend" || args.target_type !== "place") return args;

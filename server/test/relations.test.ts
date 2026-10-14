@@ -99,3 +99,35 @@ test("opener: no descriptions at all -> a warning that members could not be scre
   const demo = await runAgent({ input: INPUT, qloo: new MockQlooClient(), today: new Date("2026-10-10T12:00:00Z") });
   assert.ok(!demo.caveats.some((c) => c.includes("could not be screened out")));
 });
+
+const VENUE = { scenario: "venue" as const, venue: "Test Hall", city: "Austin" };
+
+function withPlaces(): QlooClient {
+  const mock = new MockQlooClient();
+  const places = [
+    { name: "Rival Nightclub", entity_id: "p1", affinity: 0.99 },
+    { name: "Blue Room", entity_id: "p2", affinity: 0.98, properties: { description: "Downtown blues club and live-music venue." } },
+    { name: "Bean Corner", entity_id: "p3", affinity: 0.97, properties: { description: "Coffee shop with pastries." } },
+    { name: "Spin Records", entity_id: "p4", affinity: 0.96, properties: { short_description: "Independent record store." } },
+    { name: "Hop Yard", entity_id: "p5", affinity: 0.95, properties: { description: "Craft brewery and taproom." } },
+  ];
+  return {
+    mode: "live",
+    close: async () => {},
+    call: async (tool, args) => (tool === "qloo_recommend" && args.target_type === "place"
+      ? { operation: "recommend", status: "ok", results: places }
+      : mock.call(tool, args)),
+  };
+}
+
+test("venue: competing music venues and nightclubs are not partner leads (demo run 2026-10-14: Antone's for Mohawk)", async () => {
+  const brief = await runAgent({ input: VENUE, qloo: withPlaces(), today: new Date("2026-10-10T12:00:00Z") });
+  const places = brief.partners.filter((p) => p.kind === "place").map((p) => p.name);
+  assert.deepEqual(places, ["Bean Corner", "Spin Records", "Hop Yard"]);
+  assert.ok(brief.caveats.some((c) => c.includes("competing rooms") && c.includes("Rival Nightclub") && c.includes("Blue Room")), brief.caveats.join(" | "));
+});
+
+test("opener: a promoter may still partner with clubs and venues", async () => {
+  const brief = await runAgent({ input: INPUT, qloo: withPlaces(), today: new Date("2026-10-10T12:00:00Z") });
+  assert.ok(brief.partners.some((p) => p.name === "Rival Nightclub"));
+});

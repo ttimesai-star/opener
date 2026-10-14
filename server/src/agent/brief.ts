@@ -3,7 +3,7 @@
 
 import type { QlooMode } from "../qloo/types.ts";
 import { readDemographics, readEntities, readHeatmap, readTags, readTrends, toOverlapScores } from "./normalize.ts";
-import { isAudienceTag, kindOf, latestOfKind } from "./planner.ts";
+import { isAudienceTag, isCompetingRoom, kindOf, latestOfKind } from "./planner.ts";
 import { sanitizeSecrets } from "./redact.ts";
 import { headlinerRelations, type Relation } from "./relations.ts";
 import { subjectOf, type Trend, type Brief, type BriefInput, type Candidate, type EvidenceItem, type LlmCall, type Partner, type TraceStep } from "./types.ts";
@@ -73,10 +73,17 @@ export function buildBrief(args: {
     trend: trendOf(trends, e.entityId, e.name) ?? "unknown",
   }));
 
+  // A venue does not cross-promote with rooms that compete for the same shows.
+  const competing: string[] = [];
   const partnersOf = (kind: "places" | "brands", label: Partner["kind"]): Partner[] => {
     const item = latestOfKind(evidence, kind);
     return readEntities(item?.envelope.results)
       .filter((e) => !isSubject(e.name)) // a venue is not its own partner
+      .filter((e) => {
+        if (kind !== "places" || input.scenario !== "venue" || !isCompetingRoom(e)) return true;
+        competing.push(e.name);
+        return false;
+      })
       .slice(0, TOP_PARTNERS)
       .map((e) => ({ name: e.name, kind: label, affinity: e.affinity }));
   };
@@ -128,6 +135,7 @@ export function buildBrief(args: {
     if (r.kind === "part-of") return [`Left out ${r.act}: Qloo describes it as part of ${subjectName} ("${r.quote}"). Members and side projects are not openers.`];
     return shown.has(key) ? [`${r.act}'s Qloo description mentions ${subjectName} ("${r.quote}"); check it is not a member or side project before booking.`] : [];
   });
+  if (competing.length > 0) relationNotes.push(`Left out of the partner leads as competing rooms (music venues, clubs): ${competing.join(", ")}.`);
   if (relations?.blind(pool)) relationNotes.push(`Qloo returned no descriptions for the shortlisted acts, so members and side projects of ${subjectName} could not be screened out; check before booking.`);
   return { ...partial, narrative: args.narrative ?? templateNarrative(partial), caveats: buildCaveats(partial, evidence, relationNotes) };
 }

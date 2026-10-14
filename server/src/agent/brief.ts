@@ -29,6 +29,8 @@ export function buildBrief(args: {
   llmCalls?: LlmCall[];
   narrative?: string;
   now?: Date;
+  /** Why the LLM handed over to the planner early (time budget, repeated call), for the caveats. */
+  handover?: string;
 }): Brief {
   const { input, evidence } = args;
   const subjectInput = subjectOf(input);
@@ -136,6 +138,7 @@ export function buildBrief(args: {
     return shown.has(key) ? [`${r.act}'s Qloo description mentions ${subjectName} ("${r.quote}"); check it is not a member or side project before booking.`] : [];
   });
   if (competing.length > 0) relationNotes.push(`Left out of the partner leads as competing rooms (music venues, clubs): ${competing.join(", ")}.`);
+  if (args.handover) relationNotes.push(`The scripted planner completed the evidence plan because ${args.handover}.`);
   if (relations?.blind(pool)) relationNotes.push(`Qloo returned no descriptions for the shortlisted acts, so members and side projects of ${subjectName} could not be screened out; check before booking.`);
   return { ...partial, narrative: args.narrative ?? templateNarrative(partial), caveats: buildCaveats(partial, evidence, relationNotes) };
 }

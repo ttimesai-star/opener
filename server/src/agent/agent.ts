@@ -5,7 +5,7 @@
 
 import { isQlooTool, type QlooClient, type QlooEnvelope, type QlooToolName } from "../qloo/types.ts";
 import { buildBrief, trendNote } from "./brief.ts";
-import type { ChatMessage, ChatResult, Llm, ToolSpec } from "./llm.ts";
+import { envMs, type ChatMessage, type ChatResult, type Llm, type ToolSpec } from "./llm.ts";
 import { isoDaysAgo, kindOf, nextPlannedStep, repairLlmArgs, TREND_POINTS, TREND_QUERY_DAYS, withPartnerFilter } from "./planner.ts";
 import { sanitizeSecrets } from "./redact.ts";
 import { TOOL_SPECS } from "./toolSpecs.ts";
@@ -22,12 +22,27 @@ export interface RunOptions {
   onEvent?: (event: AgentEvent) => void;
   /** Waits between Qloo rate-limit retries; injectable for tests. */
   sleep?: (ms: number) => Promise<void>;
+  /** Wall-clock budget for the LLM's tool-choosing turns (incl. the Qloo calls it makes); the planner finishes after. */
+  llmBudgetMs?: number;
+  /** Time limit for the narrative call; the template narrative is used after it. */
+  narrativeTimeoutMs?: number;
 }
+
+/**
+ * The live demo brief took 156 s: Gemini's quota ran out after two calls and a
+ * free fallback model spent 8-28 s per turn. After this budget the scripted
+ * planner, which needs no LLM, completes the evidence. Env: LLM_PLAN_BUDGET_MS.
+ */
+export const DEFAULT_LLM_BUDGET_MS = 45_000;
+/** Env: LLM_NARRATIVE_TIMEOUT_MS. */
+export const DEFAULT_NARRATIVE_TIMEOUT_MS = 12_000;
 
 /** Waits before each retry of a rate-limited Qloo call (the harness already retried briefly). */
 export const QLOO_RATE_LIMIT_BACKOFF_MS: readonly number[] = [2000, 6000];
 /** The LLM may call one evidence kind at most this often per run (one retry), and once per turn. */
 export const MAX_LLM_CALLS_PER_KIND = 2;
+/** Statuses after which another call of the same evidence kind adds nothing (the brief reads the latest one). */
+const GATHERED = new Set(["ok", "partial", "degraded"]);
 
 function isRateLimited(envelope: QlooEnvelope): boolean {
   return envelope.status === "error" && (envelope.error?.code === "QLOO_RATE_LIMIT" || /\b429\b|rate[- ]limit/i.test(`${envelope.summary ?? ""} ${envelope.error?.recovery ?? ""}`));
@@ -93,6 +108,18 @@ function compact(envelope: QlooEnvelope, max = 1800): string {
   return text.length > max ? `${text.slice(0, max)}...[truncated]` : text;
 }
 
+/** Rejects when the signal aborts, even if the LLM client ignores it (the budget must hold for any Llm). */
+function untilAborted<T>(work: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return work;
+  const stopped = () => new Error(`LLM call stopped: ${String(signal.reason ?? "time limit")}`);
+  if (signal.aborted) return Promise.reject(stopped());
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(stopped());
+    signal.addEventListener("abort", onAbort, { once: true });
+    work.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
+  });
+}
+
 /** Keeps listener bugs (e.g. a closed socket) from breaking the agent run. */
 function safeEmit(fn: ((e: AgentEvent) => void) | undefined, event: AgentEvent): void {
   try {
@@ -117,6 +144,11 @@ export async function runAgent(opts: RunOptions): Promise<Brief> {
   // a kind is capped per run and per turn (a demo run sent five recommends in a row into a Qloo 429).
   const llmResults = new Map<string, QlooEnvelope>();
   const llmKindCount = new Map<string, number>();
+  const llmKindStatus = new Map<string, QlooEnvelope["status"]>();
+  const llmBudgetMs = opts.llmBudgetMs ?? envMs(process.env.LLM_PLAN_BUDGET_MS, DEFAULT_LLM_BUDGET_MS);
+  const narrativeTimeoutMs = opts.narrativeTimeoutMs ?? envMs(process.env.LLM_NARRATIVE_TIMEOUT_MS, DEFAULT_NARRATIVE_TIMEOUT_MS);
+  /** Why the LLM stopped choosing tools before saying DONE, if it did. */
+  let handover: string | undefined;
 
   const execute = async (actor: TraceStep["actor"], tool: QlooToolName, rawArgs: Record<string, unknown>, purpose?: string): Promise<QlooEnvelope> => {
     // Partner places are always restricted to bars, shops and clubs, whoever asks.
@@ -157,12 +189,12 @@ export async function runAgent(opts: RunOptions): Promise<Brief> {
   };
 
   // One timed LLM round trip, recorded and streamed like a Qloo call.
-  const askLlm = async (llm: Llm, phase: LlmCall["phase"], messages: ChatMessage[], tools?: ToolSpec[]): Promise<ChatResult> => {
+  const askLlm = async (llm: Llm, phase: LlmCall["phase"], messages: ChatMessage[], tools?: ToolSpec[], signal?: AbortSignal): Promise<ChatResult> => {
     const id = ++seq;
     safeEmit(opts.onEvent, { type: "start", seq: id, kind: "llm", phase });
     const started = Date.now();
     try {
-      const res = await llm.chat(messages, tools);
+      const res = await untilAborted(llm.chat(messages, tools, signal ? { signal } : undefined), signal);
       const summary = phase === "plan"
         ? res.toolCalls.length > 0 ? `chose ${res.toolCalls.map((c) => c.function.name).join(", ")}` : "finished choosing tools"
         : `wrote ${res.content?.trim().length ?? 0} characters of narrative`;
@@ -185,13 +217,18 @@ export async function runAgent(opts: RunOptions): Promise<Brief> {
       { role: "system", content: systemPrompt(input, today) },
       { role: "user", content: userMessage(input) },
     ];
+    const budget = new AbortController();
+    const budgetNote = `the LLM time budget (${Math.round(llmBudgetMs / 1000)} s) ran out`;
+    const budgetTimer = setTimeout(() => budget.abort(budgetNote), llmBudgetMs);
     try {
       for (let turn = 0; turn < (opts.maxLlmTurns ?? 10) && trace.length < maxToolCalls; turn++) {
-        const res = await askLlm(llm, "plan", messages, TOOL_SPECS);
+        if (budget.signal.aborted) { handover = budgetNote; break; }
+        const res = await askLlm(llm, "plan", messages, TOOL_SPECS, budget.signal);
         if (res.toolCalls.length === 0) break;
         messages.push({ role: "assistant", content: res.content, tool_calls: res.toolCalls });
         const kindsThisTurn = new Set<string>();
         for (const call of res.toolCalls) {
+          if (budget.signal.aborted) { handover = budgetNote; break; }
           const name = call.function.name;
           let content: string;
           if (!isQlooTool(name) || !ALLOWED.has(name) || trace.length >= maxToolCalls) {
@@ -210,6 +247,11 @@ export async function runAgent(opts: RunOptions): Promise<Brief> {
             const earlier = llmResults.get(key);
             if (earlier && earlier.status !== "error") {
               content = JSON.stringify({ status: "duplicate", summary: "This exact call was already made in this run; its result is above. Do not repeat it; move on to the next step." });
+              handover ??= `the LLM repeated a call (${name})`;
+            } else if (GATHERED.has(llmKindStatus.get(kind) ?? "")) {
+              // The brief reads only the latest result of a kind: a second gathered call is a loop, not evidence.
+              content = JSON.stringify({ status: "error", summary: `Evidence for ${name} (${kind}) is already gathered. Move on to the next step.` });
+              handover ??= `the LLM repeated a call (${name})`;
             } else if (kindsThisTurn.has(kind) || (llmKindCount.get(kind) ?? 0) >= MAX_LLM_CALLS_PER_KIND) {
               content = JSON.stringify({ status: "error", summary: `Call limit for ${name} (${kind}) reached: at most one per turn and ${MAX_LLM_CALLS_PER_KIND} per run. Move on to the next step.` });
             } else {
@@ -218,15 +260,21 @@ export async function runAgent(opts: RunOptions): Promise<Brief> {
               llmUsed = true;
               const envelope = await execute("llm", name, args);
               llmResults.set(key, envelope);
+              llmKindStatus.set(kind, envelope.status);
               content = compact(envelope);
             }
           }
           messages.push({ role: "tool", tool_call_id: call.id, content });
         }
+        // A repeated call means the model is looping: hand over now instead of paying for more turns.
+        if (handover) break;
       }
     } catch (error) {
-      // LLM provider down or rate-limited: the planner below completes the brief.
+      // LLM provider down, rate-limited, or the budget ran out mid-call: the planner below completes the brief.
+      if (budget.signal.aborted) handover ??= budgetNote;
       console.warn(`LLM agent stopped, planner takes over: ${(error as Error).message}`);
+    } finally {
+      clearTimeout(budgetTimer);
     }
   }
 
@@ -236,9 +284,9 @@ export async function runAgent(opts: RunOptions): Promise<Brief> {
   }
 
   const agent: Brief["agent"] = llmUsed && plannerUsed ? "hybrid" : llmUsed ? "llm" : "planner";
-  const brief = buildBrief({ input, mode: qloo.mode, agent, evidence, trace, llmCalls, now: today });
+  const brief = buildBrief({ input, mode: qloo.mode, agent, evidence, trace, llmCalls, now: today, handover: plannerUsed ? handover : undefined });
   if (opts.llm) {
-    const narrative = await writeNarrative(opts.llm, brief, (m) => askLlm(opts.llm as Llm, "narrative", m)).catch((error: Error) => {
+    const narrative = await writeNarrative(opts.llm, brief, (m) => askLlm(opts.llm as Llm, "narrative", m, undefined, AbortSignal.timeout(narrativeTimeoutMs))).catch((error: Error) => {
       console.warn(`LLM narrative failed, using template: ${error.message}`);
       return null;
     });

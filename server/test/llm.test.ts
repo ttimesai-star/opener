@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { OpenAiCompatibleLlm, toStrictMessages, type ChatMessage } from "../src/agent/llm.ts";
+import { envMs, OpenAiCompatibleLlm, RATE_LIMIT_COOLDOWN_MS, toStrictMessages, type ChatMessage } from "../src/agent/llm.ts";
 
 // A history the way a Gemini tool turn leaves it: tool_calls carry
 // extra_content (thought signature) and ids Mistral does not accept.
@@ -64,4 +64,64 @@ test("strict messages map tool call ids consistently and keep valid ones", () =>
   assert.equal((out[5]?.tool_calls as { id: string }[])[0]?.id, "abcDEF123");
   assert.equal(out[6]?.tool_call_id, "abcDEF123");
   assert.equal(mistralLike({ messages: out }), null);
+});
+
+const okBody = () => new Response(JSON.stringify({ choices: [{ message: { content: "ok", tool_calls: [] } }] }), { status: 200 });
+
+test("a provider that answered 429 is skipped for the cooldown, then tried again (live 2026-10-14: spent Gemini quota)", async () => {
+  const hits: string[] = [];
+  const fakeFetch = (async (url: string) => {
+    hits.push(url.includes("primary") ? "primary" : "fallback");
+    return url.includes("primary") ? new Response("quota", { status: 429 }) : okBody();
+  }) as unknown as typeof fetch;
+  let clock = 0;
+  const llm = new OpenAiCompatibleLlm([
+    { name: "primary", baseUrl: "https://primary.example/v1", apiKey: "k1", model: "p" },
+    { name: "fallback", baseUrl: "https://fallback.example/v1", apiKey: "k2", model: "f" },
+  ], 5000, fakeFetch, () => clock);
+  assert.equal((await llm.chat([{ role: "user", content: "a" }])).provider, "fallback");
+  assert.deepEqual(hits, ["primary", "fallback"], "a 429 moves on at once, no same-provider retry");
+  hits.length = 0;
+  assert.equal((await llm.chat([{ role: "user", content: "b" }])).provider, "fallback");
+  assert.deepEqual(hits, ["fallback"], "cooling provider goes last and the fallback answers");
+  hits.length = 0;
+  clock += RATE_LIMIT_COOLDOWN_MS + 1;
+  await llm.chat([{ role: "user", content: "c" }]);
+  assert.deepEqual(hits, ["primary", "fallback"], "after the cooldown the primary is tried first again");
+});
+
+test("an aborted signal stops the call and skips the fallback provider", async () => {
+  const hits: string[] = [];
+  const fakeFetch = ((url: string, init: RequestInit) => {
+    hits.push(url);
+    return new Promise<Response>((_, reject) => init.signal?.addEventListener("abort", () => reject(new Error("aborted"))));
+  }) as unknown as typeof fetch;
+  const llm = new OpenAiCompatibleLlm([
+    { name: "primary", baseUrl: "https://primary.example/v1", apiKey: "k1", model: "p" },
+    { name: "fallback", baseUrl: "https://fallback.example/v1", apiKey: "k2", model: "f" },
+  ], 60_000, fakeFetch);
+  const ctl = new AbortController();
+  const started = Date.now();
+  setTimeout(() => ctl.abort("budget"), 50);
+  await assert.rejects(llm.chat([{ role: "user", content: "x" }], undefined, { signal: ctl.signal }));
+  assert.ok(Date.now() - started < 2000, "returns promptly after abort");
+  assert.equal(hits.length, 1, "no fallback request after the budget is spent");
+});
+
+test("one slow request is cut at the call timeout and the fallback answers", async () => {
+  const fakeFetch = ((url: string, init: RequestInit) => url.includes("slow")
+    ? new Promise<Response>((_, reject) => init.signal?.addEventListener("abort", () => reject(new Error("timeout"))))
+    : Promise.resolve(okBody())) as unknown as typeof fetch;
+  const llm = new OpenAiCompatibleLlm([
+    { name: "primary", baseUrl: "https://slow.example/v1", apiKey: "k1", model: "p" },
+    { name: "fallback", baseUrl: "https://fast.example/v1", apiKey: "k2", model: "f" },
+  ], 80, fakeFetch);
+  assert.equal((await llm.chat([{ role: "user", content: "x" }])).provider, "fallback");
+});
+
+test("LLM_CALL_TIMEOUT_MS: positive numbers only", () => {
+  assert.equal(envMs("15000", 1), 15000);
+  assert.equal(envMs("0", 7), 7);
+  assert.equal(envMs("abc", 7), 7);
+  assert.equal(envMs(undefined, 7), 7);
 });

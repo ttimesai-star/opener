@@ -6,7 +6,7 @@
 import { isQlooTool, type QlooClient, type QlooEnvelope, type QlooToolName } from "../qloo/types.ts";
 import { buildBrief, trendNote } from "./brief.ts";
 import type { ChatMessage, ChatResult, Llm, ToolSpec } from "./llm.ts";
-import { isoDaysAgo, kindOf, nextPlannedStep, TREND_POINTS, TREND_QUERY_DAYS, withPartnerFilter } from "./planner.ts";
+import { isoDaysAgo, kindOf, nextPlannedStep, repairLlmArgs, TREND_POINTS, TREND_QUERY_DAYS, withPartnerFilter } from "./planner.ts";
 import { sanitizeSecrets } from "./redact.ts";
 import { TOOL_SPECS } from "./toolSpecs.ts";
 import type { AgentEvent, Brief, BriefInput, EvidenceItem, LlmCall, TraceStep } from "./types.ts";
@@ -199,7 +199,7 @@ export async function runAgent(opts: RunOptions): Promise<Brief> {
           } else {
             let args: Record<string, unknown> = {};
             try {
-              args = JSON.parse(call.function.arguments || "{}") as Record<string, unknown>;
+              args = repairLlmArgs(input, evidence, name, JSON.parse(call.function.arguments || "{}") as Record<string, unknown>);
             } catch {
               content = JSON.stringify({ status: "error", summary: "Arguments were not valid JSON." });
               messages.push({ role: "tool", tool_call_id: call.id, content });

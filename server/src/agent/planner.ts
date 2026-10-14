@@ -155,6 +155,33 @@ export function subjectRef(evidence: EvidenceItem[], subject: string): string {
   return hit?.entityId ?? subject;
 }
 
+/**
+ * Repair arguments a weaker LLM gets wrong (seen live 14.10 with Llama 3.3 70B):
+ * numbers sent as strings ("limit": "12"), a rank call over 2 of the 12
+ * recommended acts, place/brand recommendations with no taste signal at all.
+ * The LLM still chooses which tool to call; the server makes the call well-formed.
+ */
+export function repairLlmArgs(input: BriefInput, evidence: EvidenceItem[], tool: string, args: Record<string, unknown>): Record<string, unknown> {
+  const a: Record<string, unknown> = { ...args };
+  for (const k of ["limit", "take", "page"]) {
+    const v = a[k];
+    if (typeof v === "string" && /^\d+$/.test(v.trim())) a[k] = Number(v.trim());
+  }
+  const { name: s } = subjectOf(input);
+  const ref = subjectRef(evidence, s);
+  if (tool === "qloo_rank") {
+    const shortlist = candidateNames(evidence, s, 10, partOfHeadliner(input, evidence));
+    const given = Array.isArray(a.options) ? a.options : [];
+    if (shortlist.length > given.length) a.options = shortlist;
+    if (!Array.isArray(a.signals) || a.signals.length === 0) a.signals = [ref];
+    if (!a.signal_location) a.signal_location = input.city;
+  }
+  if (tool === "qloo_recommend" && (a.target_type === "place" || a.target_type === "brand")) {
+    if (!Array.isArray(a.signals) || a.signals.length === 0) a.signals = [ref];
+  }
+  return a;
+}
+
 export function nextPlannedStep(input: BriefInput, evidence: EvidenceItem[], today = new Date()): PlannedStep | null {
   const have = (k: EvidenceKind) => latestOfKind(evidence, k) !== undefined;
   // A kind that already failed with an error is not retried by the planner.

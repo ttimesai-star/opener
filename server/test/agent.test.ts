@@ -403,3 +403,30 @@ test("LLM narrative facts carry 'not checked' instead of a bare 'unknown' trend 
   assert.ok(parsed.candidates.every((c) => c.trend === "not checked"), facts);
   assert.equal(parsed.scoreSource, "recommend");
 });
+
+test("weak LLM arguments are repaired: numeric strings, a two-act rank, signal-less partner calls (live Llama run 2026-10-14)", async () => {
+  const qloo = new MockQlooClient();
+  let turn = 0;
+  const call = (name: string, args: Record<string, unknown>) =>
+    ({ content: null, provider: "fake", toolCalls: [{ id: String(turn), type: "function" as const, function: { name, arguments: JSON.stringify(args) } }] });
+  const llm: Llm = {
+    chat: async (_m: ChatMessage[], tools?: ToolSpec[]): Promise<ChatResult> => {
+      if (!tools) return { content: "Narrative.", toolCalls: [], provider: "fake" };
+      turn++;
+      if (turn === 1) return call("qloo_describe", { entity: INPUT.headliner, type: "artist" });
+      if (turn === 2) return call("qloo_recommend", { target_type: "artist", signals: [INPUT.headliner], signal_location: INPUT.city, limit: "12" });
+      if (turn === 3) return call("qloo_rank", { option_type: "artist", options: ["only one", "only two"] });
+      if (turn === 4) return call("qloo_recommend", { target_type: "brand" });
+      return { content: "DONE", toolCalls: [], provider: "fake" };
+    },
+  };
+  await runAgent({ input: INPUT, qloo, llm, today: TODAY });
+  const rec = qloo.calls.find((c) => c.tool === "qloo_recommend" && c.args.target_type === "artist");
+  assert.equal(rec?.args.limit, 12);
+  const rank = qloo.calls.find((c) => c.tool === "qloo_rank");
+  assert.ok(Array.isArray(rank?.args.options) && (rank!.args.options as unknown[]).length > 2, "rank must cover the shortlist");
+  assert.ok(!(rank!.args.options as string[]).includes("only one"));
+  assert.ok(Array.isArray(rank?.args.signals) && (rank!.args.signals as unknown[]).length === 1);
+  const brand = qloo.calls.find((c) => c.tool === "qloo_recommend" && c.args.target_type === "brand");
+  assert.ok(Array.isArray(brand?.args.signals) && (brand!.args.signals as unknown[]).length > 0);
+});

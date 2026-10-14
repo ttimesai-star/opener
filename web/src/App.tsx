@@ -15,6 +15,14 @@ function briefTitle(b: StoredBrief): string {
     : `Openers for ${b.subject.name} in ${b.input.city}`;
 }
 
+/** Header badge: what actually ran for the brief on screen, not only what is configured. */
+export function agentLabel(llmConfigured: boolean, ran?: "llm" | "planner" | "hybrid"): string {
+  if (!llmConfigured) return "scripted agent";
+  if (ran === "planner") return "scripted planner (LLM unavailable this run)";
+  if (ran === "hybrid") return "LLM agent + scripted planner";
+  return "LLM agent";
+}
+
 export function App() {
   const [health, setHealth] = useState<Health | null>(null);
   const [scenario, setScenario] = useState<Scenario>("opener");
@@ -108,7 +116,7 @@ export function App() {
         </div>
         {health && (
           <span className={`badge ${health.qloo === "mock" ? "badge-warn" : "badge-ok"}`}>
-            {health.qloo === "mock" ? "Demo data (no Qloo key)" : "Live Qloo"} · {health.llm ? "LLM agent" : "scripted agent"}
+            {health.qloo === "mock" ? "Demo data (no Qloo key)" : "Live Qloo"} · {agentLabel(health.llm, brief?.agent)}
           </span>
         )}
       </header>

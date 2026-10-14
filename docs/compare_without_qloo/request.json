@@ -1,0 +1,15 @@
+{
+  "endpoint": "https://openrouter.ai/api/v1/chat/completions",
+  "model": "nvidia/nemotron-3-super-120b-a12b:free",
+  "temperature": 0.2,
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are a booking research assistant for concert promoters."
+    },
+    {
+      "role": "user",
+      "content": "Headliner: Radiohead. City: Berlin. Venue capacity: 1200. Who should open the show? Suggest five opening acts, ranked, with a short reason for each. Also suggest up to three places in Berlin (bars, shops, venues) and up to three brands whose audiences overlap with Radiohead's, as cross-promotion leads. Say what you based each suggestion on and how confident you are."
+    }
+  ]
+}

@@ -27,6 +27,8 @@ export interface RunOptions {
   llmBudgetMs?: number;
   /** Time limit for the narrative call; the template narrative is used after it. */
   narrativeTimeoutMs?: number;
+  /** Whole-brief target: the narrative only gets the time left until it. */
+  briefTargetMs?: number;
 }
 
 /**
@@ -37,6 +39,14 @@ export interface RunOptions {
 export const DEFAULT_LLM_BUDGET_MS = 45_000;
 /** Env: LLM_NARRATIVE_TIMEOUT_MS. */
 export const DEFAULT_NARRATIVE_TIMEOUT_MS = 12_000;
+/**
+ * Whole-brief target (env BRIEF_TARGET_MS). Live 15.10 the plan budget ran out at
+ * 45 s, the planner's Qloo calls took ~12 s and the narrative timed out at 12 s:
+ * 63 s. The narrative now gets what is left until this target, and is skipped
+ * (template narrative) when less than MIN_NARRATIVE_MS is left.
+ */
+export const DEFAULT_BRIEF_TARGET_MS = 55_000;
+export const MIN_NARRATIVE_MS = 3_000;
 
 /** Waits before each retry of a rate-limited Qloo call (the harness already retried briefly). */
 export const QLOO_RATE_LIMIT_BACKOFF_MS: readonly number[] = [2000, 6000];
@@ -135,6 +145,7 @@ function safeEmit(fn: ((e: AgentEvent) => void) | undefined, event: AgentEvent):
 export async function runAgent(opts: RunOptions): Promise<Brief> {
   const { input, qloo } = opts;
   const today = opts.today ?? new Date();
+  const runStarted = Date.now();
   const maxToolCalls = opts.maxToolCalls ?? 16;
   const evidence: EvidenceItem[] = [];
   const trace: TraceStep[] = [];
@@ -298,8 +309,18 @@ export async function runAgent(opts: RunOptions): Promise<Brief> {
 
   const agent: Brief["agent"] = llmUsed && plannerUsed ? "hybrid" : llmUsed ? "llm" : "planner";
   const brief = buildBrief({ input, mode: qloo.mode, agent, evidence, trace, llmCalls, now: today, handover: plannerUsed ? handover : undefined });
-  if (opts.llm) {
-    const limit = timeoutSignal(narrativeTimeoutMs, `narrative time limit of ${Math.round(narrativeTimeoutMs / 1000)} s`);
+  const briefTargetMs = opts.briefTargetMs ?? envMs(process.env.BRIEF_TARGET_MS, DEFAULT_BRIEF_TARGET_MS);
+  const leftMs = runStarted + briefTargetMs - Date.now();
+  const narrativeMs = Math.min(narrativeTimeoutMs, leftMs);
+  if (opts.llm && leftMs < MIN_NARRATIVE_MS) {
+    // Shown in the agent log, not skipped silently.
+    const id = ++seq;
+    const call: LlmCall = { phase: "narrative", status: "error", durationMs: 0, summary: `skipped: the ${Math.round(briefTargetMs / 1000)} s brief time target was reached; template shown` };
+    llmCalls.push(call);
+    safeEmit(opts.onEvent, { type: "start", seq: id, kind: "llm", phase: "narrative" });
+    safeEmit(opts.onEvent, { type: "end", seq: id, kind: "llm", call });
+  } else if (opts.llm) {
+    const limit = timeoutSignal(narrativeMs, `narrative time limit of ${Math.round(narrativeMs / 1000)} s`);
     const narrative = await writeNarrative(opts.llm, brief, (m) => askLlm(opts.llm as Llm, "narrative", m, undefined, limit.signal)).catch((error: Error) => {
       console.warn(`LLM narrative failed, using template: ${error.message}`);
       return null;

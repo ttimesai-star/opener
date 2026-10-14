@@ -1,0 +1,17 @@
+# Keep the free Render demo awake during the hackathon judging window.
+# A cold start on Render free took ~9 minutes on 2026-10-14; judges would see the
+# Render loading page instead of the app. One free service uses <750 instance-hours/month.
+# GitHub cron is best-effort (runs can be delayed); remove after judging ends.
+name: keepwarm
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+permissions: {}
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Ping health endpoint
+        run: curl -sS -o /dev/null -w "%{http_code} %{time_total}s\n" --max-time 150 https://opener-ri5q.onrender.com/api/health || true

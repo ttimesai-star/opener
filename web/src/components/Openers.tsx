@@ -1,4 +1,4 @@
-import type { Brief } from "../api.ts";
+import { popularityLabel, type Brief } from "../api.ts";
 
 const TREND_LABEL = { rising: "↑ rising", falling: "↓ falling", flat: "→ flat", unknown: "n/a" } as const;
 
@@ -17,7 +17,7 @@ export function Openers({ candidates, rankedCount, scoreSource }: { candidates: 
           <th>#</th>
           <th>Act</th>
           <th title={`100 = strongest audience fit ${base}, 0 = weakest. Relative, not a forecast.`}>Audience fit</th>
-          <th title="Qloo popularity percentile">Popularity</th>
+          <th title="Qloo popularity percentile as the share of entities at least as popular: smaller = more popular">Qloo popularity</th>
           <th>90-day trend</th>
         </tr>
       </thead>
@@ -32,7 +32,7 @@ export function Openers({ candidates, rankedCount, scoreSource }: { candidates: 
               </div>
               <span className="score">{o.overlapScore}</span>
             </td>
-            <td className="score">{o.popularity === null ? "n/a" : Math.round(o.popularity * 100)}</td>
+            <td className="score">{popularityLabel(o.popularity)}</td>
             <td className={`trend trend-${o.trend}`}>{TREND_LABEL[o.trend]}</td>
           </tr>
         ))}

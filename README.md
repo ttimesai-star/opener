@@ -151,7 +151,7 @@ CI (GitHub Actions) runs typecheck, unit/API tests, the web build, and a Docker 
 
 - Done 2026-10-13 on live payloads: fit scores spread across the rank call, tag-family filter, partner category filter, venue fallbacks (ambiguous name, no place demographics, brand signals).
 - Open: the candidate pool can include the headliner's own members or side projects (Radiohead -> Thom Yorke). Qloo has no "member of" field in these results; a promoter has to judge.
-- Open: popularity shows 100 for most well-known acts (percentiles near 1.0); it does not separate them.
+- Done 2026-10-15: popularity is shown as "top x%" (live percentiles for a big headliner's neighbours are all above 0.998, so a 0-100 scale read 100 for everyone). Acts within 10x of the headliner's popularity are left out as co-headliners when at least five smaller acts remain, and the 10 least popular recommended acts are ranked. The harness has no popularity filter, so for a very popular headliner every suggestion is still a well-known act; the brief says so.
 - Open: a public demo deployment (see Deploy).
 - Cross-domain show ideas from the same audience: films, podcasts and brands for theme nights, merch and pre-show playlists.
 - Ask the user to pick when Qloo returns `needs_input` for an ambiguous headliner, instead of only flagging it.

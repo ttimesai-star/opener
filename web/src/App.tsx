@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
-import { getBrief, getHealth, markdownUrl, streamBrief, type Health, type StoredBrief } from "./api.ts";
+import { getBrief, getHealth, markdownUrl, popularityLabel, streamBrief, type Health, type StoredBrief } from "./api.ts";
 import { AgentLog, applyEvent, timelineFromBrief, type TimelineItem } from "./components/AgentLog.tsx";
 import { Demographics } from "./components/Demographics.tsx";
 import { FanMap } from "./components/FanMap.tsx";
@@ -200,6 +200,7 @@ export function App() {
             <p className="narrative">{brief.narrative}</p>
             <p className="meta">
               {brief.input.scenario === "opener" && <>Headliner trend (90 days): <strong>{brief.subject.trend}</strong> · </>}
+              {brief.input.scenario === "opener" && typeof brief.subject.popularity === "number" && <>headliner Qloo popularity: {popularityLabel(brief.subject.popularity)} · </>}
               {brief.input.capacity ? <>capacity {brief.input.capacity} · </> : null}
               agent: {brief.agent} · data: {brief.mode} · {brief.generatedAt.slice(0, 16).replace("T", " ")} UTC
               {brief.cached ? " · from cache" : ""}

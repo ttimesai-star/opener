@@ -5,6 +5,7 @@
 
 import type { QlooToolName } from "../qloo/types.ts";
 import { readDemographics, readEntities, type EntityLike } from "./normalize.ts";
+import { isCoHeadline, MIN_SUPPORT_ACTS } from "./popularity.ts";
 import { headlinerRelations } from "./relations.ts";
 import { subjectOf, type BriefInput, type EvidenceItem } from "./types.ts";
 
@@ -121,6 +122,42 @@ export function partOfHeadliner(input: BriefInput, evidence: EvidenceItem[]): Ex
   return (e) => rel.of(e)?.kind === "part-of";
 }
 
+/** Qloo popularity of the resolved headliner, when qloo_describe returned it. */
+export function headlinerPopularity(evidence: EvidenceItem[]): number | null {
+  return readEntities(latestOfKind(evidence, "resolve")?.envelope.results)[0]?.popularity ?? null;
+}
+
+/**
+ * Opener scenario: acts that are not a support act for this headliner. Members
+ * and side projects always; acts at co-headline popularity (Beck, Arcade Fire
+ * for Radiohead, demo 14.10) when Qloo recommended at least MIN_SUPPORT_ACTS
+ * smaller ones. Venues: undefined (no headliner).
+ */
+export function notSupportAct(input: BriefInput, evidence: EvidenceItem[]): Exclude | undefined {
+  const partOf = partOfHeadliner(input, evidence);
+  if (!partOf) return undefined;
+  const head = headlinerPopularity(evidence);
+  const recommended = readEntities(latestOfKind(evidence, "candidates")?.envelope.results).filter((e) => !same(e.name, input.scenario === "opener" ? input.headliner : "") && !partOf(e));
+  const smaller = recommended.filter((e) => !isCoHeadline(e.popularity, head)).length;
+  if (head === null || smaller < MIN_SUPPORT_ACTS) return partOf;
+  return (e) => partOf(e) || isCoHeadline(e.popularity, head);
+}
+
+/**
+ * The acts sent to qloo_rank. Opener: support acts only, least popular first,
+ * so the ranked shortlist leans to acts that fit under the headliner (the
+ * harness has no popularity filter on recommendations). Venue: recommendation order.
+ */
+export function rankShortlist(input: BriefInput, evidence: EvidenceItem[], max = 10): string[] {
+  const { name: s } = subjectOf(input);
+  if (input.scenario !== "opener") return candidateNames(evidence, s, max);
+  const exclude = notSupportAct(input, evidence);
+  const rec = latestOfKind(evidence, "candidates");
+  const acts = readEntities(rec?.envelope.results).filter((e) => !same(e.name, s) && !exclude?.(e));
+  const rank = (p: number | null) => (p === null ? Number.POSITIVE_INFINITY : p);
+  return [...acts].sort((a, b) => rank(a.popularity) - rank(b.popularity)).slice(0, max).map((e) => e.name);
+}
+
 /** Qloo ids of the top ranked acts (names where no id came back). */
 export function rankedRefs(evidence: EvidenceItem[], max: number, subject = "", exclude?: Exclude): string[] {
   const rank = latestOfKind(evidence, "rank") ?? latestOfKind(evidence, "candidates");
@@ -170,9 +207,10 @@ export function repairLlmArgs(input: BriefInput, evidence: EvidenceItem[], tool:
   const { name: s } = subjectOf(input);
   const ref = subjectRef(evidence, s);
   if (tool === "qloo_rank") {
-    const shortlist = candidateNames(evidence, s, 10, partOfHeadliner(input, evidence));
+    const shortlist = rankShortlist(input, evidence);
     const given = Array.isArray(a.options) ? a.options : [];
-    if (shortlist.length > given.length) a.options = shortlist;
+    // Opener: the support-slot shortlist is a booking rule, not a choice left to the model.
+    if (shortlist.length > 0 && (input.scenario === "opener" || shortlist.length > given.length)) a.options = shortlist;
     if (!Array.isArray(a.signals) || a.signals.length === 0) a.signals = [ref];
     if (!a.signal_location) a.signal_location = input.city;
   }
@@ -192,7 +230,7 @@ export function nextPlannedStep(input: BriefInput, evidence: EvidenceItem[], tod
   const venue = input.scenario === "venue";
   const city = input.city;
   const ref = subjectRef(evidence, s);
-  const notPart = partOfHeadliner(input, evidence);
+  const notPart = notSupportAct(input, evidence);
 
   if (want("resolve")) {
     return { kind: "resolve", tool: "qloo_describe", args: { entity: s, type }, purpose: `Resolve ${venue ? "the venue" : "the headliner"} to a Qloo entity` };
@@ -207,13 +245,14 @@ export function nextPlannedStep(input: BriefInput, evidence: EvidenceItem[], tod
   if (want("candidates")) {
     return {
       kind: "candidates", tool: "qloo_recommend",
-      args: { target_type: "artist", signals: [ref], signal_location: city, limit: 12 },
+      // Opener: 20 (the harness maximum) so the popularity spread leaves room for support acts.
+      args: { target_type: "artist", signals: [ref], signal_location: city, limit: venue ? 12 : 20 },
       purpose: venue
         ? `Artists whose audiences overlap with the crowd that likes ${s}, weighted to ${city}`
         : `Artists whose audiences overlap with ${s}'s, weighted to ${city}`,
     };
   }
-  const candidates = candidateNames(evidence, s, 10, notPart);
+  const candidates = rankShortlist(input, evidence);
   if (want("rank") && candidates.length > 0) {
     return {
       kind: "rank", tool: "qloo_rank",

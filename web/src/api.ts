@@ -1,6 +1,8 @@
 import type { AgentEvent, Brief, BriefInput, LlmCall, TraceStep } from "../../server/src/agent/types.ts";
 
 export type { AgentEvent, Brief, BriefInput, LlmCall, TraceStep };
+// Plain function shared with the server (no Node APIs): same "top x%" label in the page and the Markdown export.
+export { popularityLabel } from "../../server/src/agent/popularity.ts";
 
 // Empty when the same Node process serves web + API (default). Set VITE_API_BASE
 // at build time when the web app is hosted separately (e.g. Cloudflare Pages).

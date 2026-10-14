@@ -5,6 +5,7 @@
 
 import { isQlooTool, type QlooClient, type QlooEnvelope, type QlooToolName } from "../qloo/types.ts";
 import { buildBrief, trendNote } from "./brief.ts";
+import { popularityLabel } from "./popularity.ts";
 import { envMs, timeoutSignal, type ChatMessage, type ChatResult, type Llm, type ToolSpec } from "./llm.ts";
 import { isoDaysAgo, kindOf, nextPlannedStep, repairLlmArgs, TREND_POINTS, TREND_QUERY_DAYS, withPartnerFilter } from "./planner.ts";
 import { sanitizeSecrets } from "./redact.ts";
@@ -292,6 +293,11 @@ export async function runAgent(opts: RunOptions): Promise<Brief> {
     const limit = timeoutSignal(narrativeTimeoutMs, `narrative time limit of ${Math.round(narrativeTimeoutMs / 1000)} s`);
     const narrative = await writeNarrative(opts.llm, brief, (m) => askLlm(opts.llm as Llm, "narrative", m, undefined, limit.signal)).catch((error: Error) => {
       console.warn(`LLM narrative failed, using template: ${error.message}`);
+      // The call itself succeeded but its text was not used: say so in the agent log.
+      const last = llmCalls.at(-1);
+      if (error.message.startsWith("narrative rejected") && last?.phase === "narrative" && last.status === "ok") {
+        last.summary = `${last.summary}; not used (${error.message.replace("narrative rejected: ", "")}), template shown`;
+      }
       return null;
     }).finally(limit.clear);
     if (narrative) brief.narrative = narrative;
@@ -302,24 +308,64 @@ export async function runAgent(opts: RunOptions): Promise<Brief> {
 /** The LLM writes prose from the brief's own numbers; it adds no facts. */
 export async function writeNarrative(llm: Llm, brief: Brief, chat?: (messages: ChatMessage[]) => Promise<ChatResult>): Promise<string | null> {
   const venue = brief.input.scenario === "venue";
-  const facts = {
-    scenario: brief.input.scenario,
-    // A missing trend is passed as "not checked" / "no trend data", never as a flat line.
-    subject: brief.subject.type === "artist" ? { ...brief.subject, trend: trendNote(brief, brief.subject) } : { ...brief.subject, trend: "not measured for venues" },
-    // Capacity is left out on purpose: Qloo has no venue-size input, and a narrative that saw
-    // it wrote "Given the venue capacity of 1200..." as if the picks accounted for it (demo 14.10).
-    city: brief.input.city,
-    date: brief.input.scenario === "venue" ? brief.input.date ?? null : null,
-    scoreSource: brief.scoreSource, candidates: brief.candidates.map((c) => ({ ...c, trend: trendNote(brief, c) })), partners: brief.partners, tasteTags: brief.tasteTags, demographics: brief.demographics, mode: brief.mode,
-  };
+  const facts = narrativeFacts(brief);
   const messages: ChatMessage[] = [
     {
       role: "system",
-      content: `Write a 3-4 sentence booking brief for ${venue ? "a venue deciding whom to book for a free date" : "a concert promoter choosing an opener"}. Use only the facts in the JSON. Do not invent numbers, names, dates or reasons. Fit scores are 0-100 relative within one Qloo call (100 = strongest act, 0 = weakest), not forecasts; never call them percentages. scoreSource names that call: "rank" (Qloo ranked the acts) or "recommend" (the rank call failed and the scores are recommendation affinities; say so and never say Qloo ranked them). A trend of "not checked" or "no trend data" is unknown: never describe such an act as not rising or flat. Qloo does not take venue capacity, ticket prices, availability or the show date into account: never mention capacity or room size, and never say or imply that the acts fit the room, the date or the budget. Plain English, no hype, no markdown.`,
+      content: `Write a 3-4 sentence booking brief for ${venue ? "a venue deciding whom to book for a free date" : "a concert promoter choosing an opener"}, in the words a booker uses. Use only the facts in the JSON. Do not invent numbers, names, dates or reasons. "fit" is 0-100 relative within this one shortlist (100 = strongest audience match, 0 = weakest), not a forecast and not a percentage; say "audience fit" if you mention it at all, and prefer words such as "the strongest audience match" over the number. "scoredBy" is "rank" (Qloo ranked the acts) or "recommend" (the rank call failed and the order comes from Qloo's recommendation; say so and never say Qloo ranked them). "popularity" is already a readable label such as "top 0.03%"; quote it as written or leave it out. Never write JSON field names (overlapScore, affinity, scoredBy, entityId) and never write raw decimals such as 0.972. A trend of "not checked" or "no trend data" is unknown: never describe such an act as not rising or flat. Qloo does not take venue capacity, ticket prices, availability or the show date into account: never mention capacity or room size, and never say or imply that the acts fit the room, the date or the budget. Plain English, no hype, no markdown.`,
     },
     { role: "user", content: JSON.stringify(facts) },
   ];
   const res = chat ? await chat(messages) : await llm.chat(messages);
   const text = res.content?.trim();
-  return text ? text.slice(0, 1200) : null;
+  if (!text) return null;
+  // The model still echoed field names and raw numbers on the live demo (14.10:
+  // "overlap score of 100 with an affinity of 0.972 and a popularity near 1.0").
+  // Such text is not shown: the template narrative is used instead.
+  const problem = narrativeProblem(text);
+  if (problem) throw new Error(`narrative rejected: ${problem}`);
+  return text.slice(0, 1200);
+}
+
+/** Labels the brief already shows, without raw Qloo numbers: the narrative LLM sees only these. */
+export function narrativeFacts(brief: Brief): Record<string, unknown> {
+  // Demographics are signed skews per band; the model gets only which bands lean over or under.
+  const lean = (r: Record<string, number> | undefined) => {
+    const e = Object.entries(r ?? {}).sort((a, b) => b[1] - a[1]);
+    const label = (k: string) => k.replace(/_/g, " ");
+    return { over: e.filter(([, v]) => v > 0).slice(0, 2).map(([k]) => label(k)), under: e.filter(([, v]) => v < 0).slice(-2).map(([k]) => label(k)) };
+  };
+  return {
+    scenario: brief.input.scenario,
+    // A missing trend is passed as "not checked" / "no trend data", never as a flat line.
+    subject: {
+      name: brief.subject.name, type: brief.subject.type,
+      trend: brief.subject.type === "artist" ? trendNote(brief, brief.subject) : "not measured for venues",
+      ...(typeof brief.subject.popularity === "number" ? { popularity: popularityLabel(brief.subject.popularity) } : {}),
+    },
+    // Capacity is left out on purpose: Qloo has no venue-size input, and a narrative that saw
+    // it wrote "Given the venue capacity of 1200..." as if the picks accounted for it (demo 14.10).
+    city: brief.input.city,
+    date: brief.input.scenario === "venue" ? brief.input.date ?? null : null,
+    scoredBy: brief.scoreSource,
+    candidates: brief.candidates.map((c) => ({ name: c.name, fit: c.overlapScore, popularity: popularityLabel(c.popularity), trend: trendNote(brief, c) })),
+    partners: brief.partners.map((p) => ({ name: p.name, kind: p.kind })),
+    tasteTags: brief.tasteTags,
+    audience: brief.demographics ? { age: lean(brief.demographics.age), gender: lean(brief.demographics.gender) } : null,
+    mode: brief.mode,
+  };
+}
+
+const NARRATIVE_PROBLEMS: [RegExp, string][] = [
+  [/\boverlap[\s_-]?score/i, "field name overlapScore"],
+  [/\bscore\s?source\b|\bscoredBy\b|\bentity_?id\b/i, "JSON field name"],
+  [/\baffinit(?:y|ies)\b[^.]{0,20}?\d/i, "raw affinity number"],
+  [/\bpopularity\b[^.]{0,20}?\b(?:0?\.\d+|1\.0+)(?![\d%])/i, "raw popularity number"],
+  [/(?<![\d.%])0\.\d{2,}(?![\d%])/, "raw decimal"],
+];
+
+/** Why a narrative must not be shown (internal field names, raw Qloo numbers), or null when it reads fine. */
+export function narrativeProblem(text: string): string | null {
+  for (const [re, why] of NARRATIVE_PROBLEMS) if (re.test(text)) return why;
+  return null;
 }

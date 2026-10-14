@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { runAgent } from "../src/agent/agent.ts";
-import { relationToHeadliner } from "../src/agent/relations.ts";
+import { quoteAround, relationToHeadliner } from "../src/agent/relations.ts";
 import { MockQlooClient } from "../src/qloo/mockClient.ts";
 import type { QlooClient, QlooEnvelope } from "../src/qloo/types.ts";
 
@@ -130,4 +130,27 @@ test("venue: competing music venues and nightclubs are not partner leads (demo r
 test("opener: a promoter may still partner with clubs and venues", async () => {
   const brief = await runAgent({ input: INPUT, qloo: withPlaces(), today: new Date("2026-10-10T12:00:00Z") });
   assert.ok(brief.partners.some((p) => p.name === "Rival Nightclub"));
+});
+
+test("quotes in caveats start and end on word boundaries (live demo 14.10: '...wn as the principal vocalist')", () => {
+  // Synthetic text shaped like the live description; shifting the start moves the 40-character cut through words.
+  const full = "Born and raised in Wellingborough, Thomas Edward Yorke is an English musician, best known as the principal vocalist and songwriter of the rock band Radiohead, and a solo artist in his own right since the early years.";
+  for (let shift = 0; shift < 14; shift++) {
+    const text = full.slice(shift);
+    const m = /principal vocalist[^,]*Radiohead/.exec(text);
+    assert.ok(m);
+    const q = quoteAround(text, m.index, m[0].length);
+    const inner = q.replace(/^\.\.\./, "").replace(/\.\.\.$/, "");
+    const at = text.indexOf(inner);
+    assert.ok(at >= 0, q);
+    assert.ok(at === 0 || /\s/.test(text[at - 1] ?? ""), `starts mid-word (shift ${shift}): ${q}`);
+    const after = at + inner.length;
+    assert.ok(after === text.length || /\s/.test(text[after] ?? ""), `ends mid-word (shift ${shift}): ${q}`);
+    assert.ok(inner.includes(m[0]), "the matched phrase stays whole");
+    assert.ok(q.startsWith("...") && q.endsWith("..."));
+  }
+  // Short text: no cut, no ellipsis.
+  assert.equal(quoteAround("lead vocalist of Radiohead", 0, 26), "lead vocalist of Radiohead");
+  const r = relationToHeadliner(act("Thom Yorke", full), HEAD);
+  assert.equal(r?.kind, "part-of");
 });

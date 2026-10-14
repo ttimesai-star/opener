@@ -113,6 +113,8 @@ export class MockQlooClient implements QlooClient {
             type: `urn:entity:${target}`,
             popularity: Number((0.4 + rnd() * 0.55).toFixed(3)),
             affinity: Number((0.55 + rnd() * 0.44).toFixed(3)),
+            // Live results carry a short description; the brief screens members of the headliner with it.
+            ...(target === "artist" ? { properties: { short_description: "Fictional act generated for the Opener demo." } } : {}),
           }))
           .sort((a, b) => b.affinity - a.affinity);
         return envelope("recommend", results);

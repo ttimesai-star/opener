@@ -4,7 +4,8 @@
 // a few arguments differ.
 
 import type { QlooToolName } from "../qloo/types.ts";
-import { readDemographics, readEntities } from "./normalize.ts";
+import { readDemographics, readEntities, type EntityLike } from "./normalize.ts";
+import { headlinerRelations } from "./relations.ts";
 import { subjectOf, type BriefInput, type EvidenceItem } from "./types.ts";
 
 export type EvidenceKind =
@@ -89,30 +90,43 @@ export function isoDaysAgo(days: number, today: Date): string {
 
 const same = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
 
-/** Candidate names from the artist recommendation, excluding the subject. */
-export function candidateNames(evidence: EvidenceItem[], subject: string, max = 10): string[] {
+type Exclude = (e: EntityLike) => boolean;
+
+/** Candidate names from the artist recommendation, excluding the subject (and acts that are part of it). */
+export function candidateNames(evidence: EvidenceItem[], subject: string, max = 10, exclude?: Exclude): string[] {
   const rec = latestOfKind(evidence, "candidates");
   if (!rec) return [];
-  return readEntities(rec.envelope.results).map((e) => e.name).filter((n) => !same(n, subject)).slice(0, max);
+  return readEntities(rec.envelope.results).filter((e) => !same(e.name, subject) && !exclude?.(e)).map((e) => e.name).slice(0, max);
+}
+
+/**
+ * Opener scenario: true for acts Qloo describes as part of the headliner
+ * (members, solo and side projects). They are not openers. Venues: none.
+ */
+export function partOfHeadliner(input: BriefInput, evidence: EvidenceItem[]): Exclude | undefined {
+  if (input.scenario !== "opener") return undefined;
+  const resolvedName = readEntities(latestOfKind(evidence, "resolve")?.envelope.results)[0]?.name;
+  const rel = headlinerRelations(evidence, [input.headliner, ...(resolvedName ? [resolvedName] : [])]);
+  return (e) => rel.of(e)?.kind === "part-of";
 }
 
 /** Qloo ids of the top ranked acts (names where no id came back). */
-export function rankedRefs(evidence: EvidenceItem[], max: number, subject = ""): string[] {
+export function rankedRefs(evidence: EvidenceItem[], max: number, subject = "", exclude?: Exclude): string[] {
   const rank = latestOfKind(evidence, "rank") ?? latestOfKind(evidence, "candidates");
   if (!rank) return [];
   return readEntities(rank.envelope.results)
-    .filter((e) => !same(e.name, subject))
+    .filter((e) => !same(e.name, subject) && !exclude?.(e))
     .sort((a, b) => (b.affinity ?? 0) - (a.affinity ?? 0))
     .map((e) => e.entityId ?? e.name)
     .slice(0, max);
 }
 
 /** Top names of the rank call; falls back to the recommendation order. */
-export function rankedNames(evidence: EvidenceItem[], max: number, subject = ""): string[] {
+export function rankedNames(evidence: EvidenceItem[], max: number, subject = "", exclude?: Exclude): string[] {
   const rank = latestOfKind(evidence, "rank");
-  if (!rank) return candidateNames(evidence, subject, max);
+  if (!rank) return candidateNames(evidence, subject, max, exclude);
   return readEntities(rank.envelope.results)
-    .filter((e) => !same(e.name, subject))
+    .filter((e) => !same(e.name, subject) && !exclude?.(e))
     .sort((a, b) => (b.affinity ?? 0) - (a.affinity ?? 0))
     .map((e) => e.name)
     .slice(0, max);
@@ -140,6 +154,7 @@ export function nextPlannedStep(input: BriefInput, evidence: EvidenceItem[], tod
   const venue = input.scenario === "venue";
   const city = input.city;
   const ref = subjectRef(evidence, s);
+  const notPart = partOfHeadliner(input, evidence);
 
   if (want("resolve")) {
     return { kind: "resolve", tool: "qloo_describe", args: { entity: s, type }, purpose: `Resolve ${venue ? "the venue" : "the headliner"} to a Qloo entity` };
@@ -160,7 +175,7 @@ export function nextPlannedStep(input: BriefInput, evidence: EvidenceItem[], tod
         : `Artists whose audiences overlap with ${s}'s, weighted to ${city}`,
     };
   }
-  const candidates = candidateNames(evidence, s);
+  const candidates = candidateNames(evidence, s, 10, notPart);
   if (want("rank") && candidates.length > 0) {
     return {
       kind: "rank", tool: "qloo_rank",
@@ -168,7 +183,7 @@ export function nextPlannedStep(input: BriefInput, evidence: EvidenceItem[], tod
       purpose: "Score the shortlist against one shared profile so scores are comparable",
     };
   }
-  const trendEntities = venue ? rankedRefs(evidence, 5, s) : [ref, ...rankedRefs(evidence, 4, s)];
+  const trendEntities = venue ? rankedRefs(evidence, 5, s) : [ref, ...rankedRefs(evidence, 4, s, notPart)];
   if (want("trends") && have("rank") && trendEntities.length > 0) {
     const entities = trendEntities;
     return {

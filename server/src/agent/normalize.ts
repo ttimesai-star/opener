@@ -29,6 +29,8 @@ export interface EntityLike {
   entityId?: string;
   affinity: number | null;
   popularity: number | null;
+  /** properties.short_description and/or description, when the harness passed them. */
+  description?: string;
 }
 
 export function readEntities(results: unknown): EntityLike[] {
@@ -36,11 +38,14 @@ export function readEntities(results: unknown): EntityLike[] {
     const r = asRecord(item);
     if (!r || typeof r.name !== "string") return [];
     const query = asRecord(r.query);
+    const props = asRecord(r.properties);
+    const text = [props?.short_description, props?.description].filter((v): v is string => typeof v === "string" && v.trim() !== "");
     return [{
       name: r.name,
       entityId: typeof r.entity_id === "string" ? r.entity_id : undefined,
       affinity: num(r.affinity) ?? num(query?.affinity),
       popularity: num(r.popularity),
+      ...(text.length > 0 ? { description: [...new Set(text.map((t) => t.trim()))].join(" ") } : {}),
     }];
   });
 }

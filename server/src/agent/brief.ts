@@ -5,6 +5,7 @@ import type { QlooMode } from "../qloo/types.ts";
 import { readDemographics, readEntities, readHeatmap, readTags, readTrends, toOverlapScores } from "./normalize.ts";
 import { isAudienceTag, kindOf, latestOfKind } from "./planner.ts";
 import { sanitizeSecrets } from "./redact.ts";
+import { headlinerRelations, type Relation } from "./relations.ts";
 import { subjectOf, type Trend, type Brief, type BriefInput, type Candidate, type EvidenceItem, type LlmCall, type Partner, type TraceStep } from "./types.ts";
 
 export const TOP_CANDIDATES = 5;
@@ -46,8 +47,19 @@ export function buildBrief(args: {
   // Scores are spread over every act in the rank call, then the top five shown.
   // Without a rank result the recommendation's affinities are used, and the brief says so.
   const scored = rank ?? fallback;
-  const ranked = readEntities(scored?.envelope.results)
-    .filter((e) => !isSubject(e.name))
+  // Members, solo and side projects of the headliner are not openers (opener scenario).
+  const relations = input.scenario === "opener" ? headlinerRelations(evidence, [subjectInput.name, subjectName]) : null;
+  const scoredActs = readEntities(scored?.envelope.results).filter((e) => !isSubject(e.name));
+  const related = new Map<string, Relation>();
+  // The planner already keeps members out of the rank call; check the recommendation too so the brief says why.
+  const recommended = scored === fallback ? [] : readEntities(fallback?.envelope.results).filter((e) => !isSubject(e.name));
+  for (const e of [...scoredActs, ...recommended]) {
+    if (related.has(e.entityId ?? e.name)) continue;
+    const r = relations?.of(e);
+    if (r) related.set(e.entityId ?? e.name, r);
+  }
+  const ranked = scoredActs
+    .filter((e) => related.get(e.entityId ?? e.name)?.kind !== "part-of")
     .sort((a, b) => (b.affinity ?? 0) - (a.affinity ?? 0));
   const scores = toOverlapScores(ranked.map((e) => e.affinity));
   const pool = ranked.slice(0, TOP_CANDIDATES);
@@ -111,7 +123,13 @@ export function buildBrief(args: {
     llmCalls: args.llmCalls ?? [],
     generatedAt: (args.now ?? new Date()).toISOString(),
   } satisfies Omit<Brief, "narrative" | "caveats">;
-  return { ...partial, narrative: args.narrative ?? templateNarrative(partial), caveats: buildCaveats(partial, evidence) };
+  const shown = new Set(pool.map((e) => e.entityId ?? e.name));
+  const relationNotes = [...related.entries()].flatMap(([key, r]) => {
+    if (r.kind === "part-of") return [`Left out ${r.act}: Qloo describes it as part of ${subjectName} ("${r.quote}"). Members and side projects are not openers.`];
+    return shown.has(key) ? [`${r.act}'s Qloo description mentions ${subjectName} ("${r.quote}"); check it is not a member or side project before booking.`] : [];
+  });
+  if (relations?.blind(pool)) relationNotes.push(`Qloo returned no descriptions for the shortlisted acts, so members and side projects of ${subjectName} could not be screened out; check before booking.`);
+  return { ...partial, narrative: args.narrative ?? templateNarrative(partial), caveats: buildCaveats(partial, evidence, relationNotes) };
 }
 
 type BriefCore = Omit<Brief, "narrative" | "caveats">;
@@ -165,7 +183,7 @@ export function templateNarrative(b: BriefCore): string {
 }
 
 /** "What this does NOT prove" - fixed limits plus anything the evidence itself flagged. */
-export function buildCaveats(b: BriefCore, evidence: EvidenceItem[]): string[] {
+export function buildCaveats(b: BriefCore, evidence: EvidenceItem[], notes: string[] = []): string[] {
   const out: string[] = [];
   if (b.mode === "mock") out.push("DEMO MODE: all names and numbers are synthetic placeholders, not Qloo data.");
   out.push(
@@ -199,5 +217,6 @@ export function buildCaveats(b: BriefCore, evidence: EvidenceItem[]): string[] {
     else if (e.envelope.status === "partial" || e.envelope.status === "degraded") out.push(`${e.tool} came back ${e.envelope.status}: ${e.envelope.summary ?? ""}`.trim());
   });
   if (b.llmCalls.some((c) => c.status === "error")) out.push("The LLM was unavailable for part of this run; the scripted planner completed the evidence plan.");
+  out.push(...notes);
   return [...new Set(out.map((str) => sanitizeSecrets(str)))];
 }

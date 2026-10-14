@@ -14,3 +14,11 @@ test("live client spawns the harness with the env passed to createQlooClient (Ju
   assert.equal(spawned.PATH ?? spawned.Path, undefined, "process.env does not leak in when an env is given");
   assert.equal(client.command, "custom-qloo");
 });
+
+test("warm-up of a harness that cannot start rejects (the server logs it) and the next call connects afresh", async () => {
+  // The error text differs by platform (ENOENT -> install hint on Linux, "Connection closed" via a Windows shell).
+  const client = new McpQlooClient({ command: "opener-no-such-binary-xyz", env: { QLOO_API_KEY: "k" } });
+  await assert.rejects(client.warmUp());
+  await assert.rejects(client.call("qloo_describe", { entity: "x" }));
+  await client.close();
+});

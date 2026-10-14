@@ -198,6 +198,14 @@ export async function runAgent(opts: RunOptions): Promise<Brief> {
     const started = Date.now();
     try {
       const res = await untilAborted(llm.chat(messages, tools, signal ? { signal } : undefined), signal);
+      // A narrative with field names or raw numbers is not shown; the live log must say so too (Jules review 2026-10-15).
+      const problem = phase === "narrative" ? narrativeProblem(res.content?.trim() ?? "") : null;
+      if (problem) {
+        const call: LlmCall = { phase, status: "error", provider: res.provider, durationMs: Date.now() - started, summary: `wrote ${res.content?.trim().length ?? 0} characters, not used (${problem}); template shown` };
+        llmCalls.push(call);
+        safeEmit(opts.onEvent, { type: "end", seq: id, kind: "llm", call });
+        throw new NarrativeRejected(problem);
+      }
       const summary = phase === "plan"
         ? res.toolCalls.length > 0 ? `chose ${res.toolCalls.map((c) => c.function.name).join(", ")}` : "finished choosing tools"
         : `wrote ${res.content?.trim().length ?? 0} characters of narrative`;
@@ -206,6 +214,7 @@ export async function runAgent(opts: RunOptions): Promise<Brief> {
       safeEmit(opts.onEvent, { type: "end", seq: id, kind: "llm", call });
       return res;
     } catch (error) {
+      if (error instanceof NarrativeRejected) throw error; // already recorded above
       // Error text from providers can echo request details; keep only the first line, trimmed.
       const call: LlmCall = { phase, status: "error", durationMs: Date.now() - started, summary: sanitizeSecrets((error as Error).message.split("\n")[0] ?? "").slice(0, 160) || "error" };
       llmCalls.push(call);
@@ -293,11 +302,6 @@ export async function runAgent(opts: RunOptions): Promise<Brief> {
     const limit = timeoutSignal(narrativeTimeoutMs, `narrative time limit of ${Math.round(narrativeTimeoutMs / 1000)} s`);
     const narrative = await writeNarrative(opts.llm, brief, (m) => askLlm(opts.llm as Llm, "narrative", m, undefined, limit.signal)).catch((error: Error) => {
       console.warn(`LLM narrative failed, using template: ${error.message}`);
-      // The call itself succeeded but its text was not used: say so in the agent log.
-      const last = llmCalls.at(-1);
-      if (error.message.startsWith("narrative rejected") && last?.phase === "narrative" && last.status === "ok") {
-        last.summary = `${last.summary}; not used (${error.message.replace("narrative rejected: ", "")}), template shown`;
-      }
       return null;
     }).finally(limit.clear);
     if (narrative) brief.narrative = narrative;
@@ -323,7 +327,7 @@ export async function writeNarrative(llm: Llm, brief: Brief, chat?: (messages: C
   // "overlap score of 100 with an affinity of 0.972 and a popularity near 1.0").
   // Such text is not shown: the template narrative is used instead.
   const problem = narrativeProblem(text);
-  if (problem) throw new Error(`narrative rejected: ${problem}`);
+  if (problem) throw new NarrativeRejected(problem);
   return text.slice(0, 1200);
 }
 
@@ -356,13 +360,22 @@ export function narrativeFacts(brief: Brief): Record<string, unknown> {
   };
 }
 
+/** A decimal that is not a percentage: "0.972", ".972", "0.8", "1.0" (not "0.03%" or "0.03 percent"). */
+const RAW_DECIMAL = String.raw`(?<![\w.])(?:[01]?\.\d+)(?![\d%]|\s*per\s?cent)`;
 const NARRATIVE_PROBLEMS: [RegExp, string][] = [
   [/\boverlap[\s_-]?score/i, "field name overlapScore"],
   [/\bscore\s?source\b|\bscoredBy\b|\bentity_?id\b/i, "JSON field name"],
-  [/\baffinit(?:y|ies)\b[^.]{0,20}?\d/i, "raw affinity number"],
-  [/\bpopularity\b[^.]{0,20}?\b(?:0?\.\d+|1\.0+)(?![\d%])/i, "raw popularity number"],
-  [/(?<![\d.%])0\.\d{2,}(?![\d%])/, "raw decimal"],
+  // "an affinity of 0.972", not "an affinity with 2 of the acts" (Jules review 2026-10-15).
+  [new RegExp(String.raw`\baffinit(?:y|ies)\b[^.]{0,20}?${RAW_DECIMAL}`, "i"), "raw affinity number"],
+  [new RegExp(String.raw`\bpopularity\b[^.]{0,20}?${RAW_DECIMAL}`, "i"), "raw popularity number"],
+  [new RegExp(RAW_DECIMAL), "raw decimal"],
 ];
+
+class NarrativeRejected extends Error {
+  constructor(problem: string) {
+    super(`narrative rejected: ${problem}`);
+  }
+}
 
 /** Why a narrative must not be shown (internal field names, raw Qloo numbers), or null when it reads fine. */
 export function narrativeProblem(text: string): string | null {

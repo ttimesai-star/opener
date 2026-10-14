@@ -21,10 +21,17 @@ const BAD = [
   "Act One has a popularity of 0.979.",
   "The scoreSource is rank.",
   "Act Two follows at 0.9613.",
+  // Jules review 2026-10-15: no leading zero, one digit.
+  "Act One has an affinity of .972.",
+  "Act One scores 0.8 against the headliner.",
 ];
 const GOOD = [
   "Act One is the strongest audience match among the 10 acts Qloo ranked for Berlin; it sits in the top 0.03% by Qloo popularity and its 90-day trend is flat.",
   "Act Two and Act Three follow with an audience fit of 64 and 63. Partnership leads with the same audience: a record store and a coffee bar.",
+  // Jules review 2026-10-15: readable text that the first version rejected.
+  "The crowd shares an audience affinity with 2 of the shortlisted acts.",
+  "Act One sits in the top 0.03 percent by Qloo popularity.",
+  "Doors at 7.30 are not a Qloo input.",
 ];
 
 test("narrative check: field names and raw Qloo numbers are rejected, readable text passes", () => {
@@ -57,7 +64,21 @@ test("an LLM narrative with field names is not shown: template instead, agent lo
   assert.match(brief.narrative, /strongest audience affinity/);
   const call = brief.llmCalls.at(-1);
   assert.equal(call?.phase, "narrative");
-  assert.match(call?.summary ?? "", /not used \(field name overlapScore\), template shown/);
+  assert.equal(call?.status, "error");
+  assert.match(call?.summary ?? "", /not used \(field name overlapScore\); template shown/);
+});
+
+test("the live log's end event already says the narrative was not used (Jules review 2026-10-15)", async () => {
+  const llm: Llm = {
+    async chat(_m: ChatMessage[], tools?: ToolSpec[]): Promise<ChatResult> {
+      if (tools) return { content: "DONE", toolCalls: [], provider: "fake" };
+      return { content: BAD[0] as string, toolCalls: [], provider: "fake" };
+    },
+  };
+  const ends: string[] = [];
+  await runAgent({ input: OPENER, qloo: new MockQlooClient(), llm, today: TODAY, onEvent: (e) => { if (e.type === "end" && e.kind === "llm" && e.call.phase === "narrative") ends.push(`${e.call.status} ${e.call.summary}`); } });
+  assert.equal(ends.length, 1);
+  assert.match(ends[0] ?? "", /^error .*not used/);
 });
 
 test("a readable LLM narrative is shown as written", async () => {

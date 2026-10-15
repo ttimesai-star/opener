@@ -63,8 +63,11 @@ export function buildBrief(args: {
   }
   const popularity = new Map(readEntities(fallback?.envelope.results).map((e) => [e.name, e.popularity]));
   const popOf = (e: { name: string; popularity: number | null }) => e.popularity ?? popularity.get(e.name) ?? null;
+  // Acts Qloo lists with an end year have stopped performing; rank results may not carry the year, the recommendation does.
+  const ended = new Map(readEntities(fallback?.envelope.results).filter((e) => e.endYear !== undefined).map((e) => [e.name.toLowerCase(), e.endYear as number]));
+  for (const e of scoredActs) if (e.endYear !== undefined) ended.set(e.name.toLowerCase(), e.endYear);
   const notPart = scoredActs
-    .filter((e) => related.get(e.entityId ?? e.name)?.kind !== "part-of")
+    .filter((e) => related.get(e.entityId ?? e.name)?.kind !== "part-of" && !ended.has(e.name.toLowerCase()))
     .sort((a, b) => (b.affinity ?? 0) - (a.affinity ?? 0));
   // Opener: an act about as popular as the headliner is a co-headliner, not a support act.
   // Left out when enough smaller acts remain; otherwise kept and flagged.
@@ -149,7 +152,8 @@ export function buildBrief(args: {
   } satisfies Omit<Brief, "narrative" | "caveats">;
   const shown = new Set(pool.map((e) => e.entityId ?? e.name));
   const relationNotes = [...related.entries()].flatMap(([key, r]) => {
-    if (r.kind === "part-of") return [`Left out ${r.act}: Qloo describes it as part of ${subjectName} ("${r.quote}"). Members and side projects are not openers.`];
+    // "Qloo describes it as part of Radiohead" read wrong for a person (demo 15.10); this reads right for a person or a band.
+    if (r.kind === "part-of") return [`Left out ${r.act}, a member or side project of ${subjectName} according to Qloo's description ("${r.quote}"). Members and side projects are not openers.`];
     return shown.has(key) ? [`${r.act}'s Qloo description mentions ${subjectName} ("${r.quote}"); check it is not a member or side project before booking.`] : [];
   });
   if (headPop !== null && coHeadline.length > 0) {
@@ -159,10 +163,27 @@ export function buildBrief(args: {
       ? `Left out as co-headline level, ${why}: ${list}. A support slot needs a smaller act.`
       : `Shown although at co-headline level, ${why}, because Qloo returned too few smaller acts: ${list}.`);
   }
-  // The harness has no popularity filter on recommendations: say so when only very popular acts came back.
+  // Opener: which popularity ceiling the candidate pool came from (filter.popularity.max, /v2/insights).
+  const tries = evidence.filter((e) => kindOf(e.tool, e.args) === "candidates");
+  const ceilings = tries.map((e) => e.args.popularity_max).filter((c): c is number => typeof c === "number");
+  const usedCeiling = fallback?.args.popularity_max;
+  if (input.scenario === "opener" && typeof usedCeiling === "number") {
+    const widened = ceilings.length > 1 ? ` The first limit (outside the ${popularityLabel(Math.min(...ceilings))}) left fewer than ${MIN_SUPPORT_ACTS} usable acts, so it was widened.` : "";
+    relationNotes.push(`Candidates are limited to acts outside Qloo's ${popularityLabel(usedCeiling)} by popularity (${subjectName}: ${popularityLabel(headPop)}), with Qloo's filter.popularity.max: a support act should draw a smaller crowd than the headliner, so bigger acts with a closer audience fit are left out on purpose.${widened}`);
+  }
+  // Unfiltered pool: say so when only very popular acts came back.
   const recommendedPops = readEntities(fallback?.envelope.results).filter((e) => !isSubject(e.name)).map((e) => e.popularity).filter((p): p is number => p !== null);
-  if (input.scenario === "opener" && recommendedPops.length > 0 && Math.min(...recommendedPops) >= 0.99) {
-    relationNotes.push(`Every act Qloo recommended here is in the top 1% by Qloo popularity (the least popular is ${popularityLabel(Math.min(...recommendedPops))}). The Qloo harness has no popularity filter, so smaller local acts do not come up; the shortlist ranks the least popular of them.`);
+  if (input.scenario === "opener" && typeof usedCeiling !== "number" && recommendedPops.length > 0 && Math.min(...recommendedPops) >= 0.99) {
+    const limited = tries.filter((e) => typeof e.args.popularity_max === "number");
+    const failed = limited.some((e) => e.envelope.status === "error");
+    const why = ceilings.length > 0
+      ? `The call for smaller acts (${ceilings.map((c) => `outside the ${popularityLabel(c)}`).join(", then ")}) ${failed ? "failed" : `returned fewer than ${MIN_SUPPORT_ACTS} usable acts`}, so this is Qloo's unfiltered recommendation`
+      : `${subjectName}'s Qloo popularity was not available to set a limit`;
+    relationNotes.push(`Every act Qloo recommended here is in the top 1% by Qloo popularity (the least popular is ${popularityLabel(Math.min(...recommendedPops))}). ${why}; the shortlist ranks the least popular of them.`);
+  }
+  if (ended.size > 0) {
+    const shownEnded = [...ended.entries()].map(([k, y]) => `${[...scoredActs, ...readEntities(fallback?.envelope.results)].find((e) => e.name.toLowerCase() === k)?.name ?? k} (${y})`);
+    relationNotes.push(`Left out as no longer active (Qloo lists an end year): ${[...new Set(shownEnded)].join(", ")}.`);
   }
   if (competing.length > 0) relationNotes.push(`Left out of the partner leads as competing rooms (music venues, clubs): ${competing.join(", ")}.`);
   if (args.handover) relationNotes.push(`The scripted planner completed the evidence plan because ${args.handover}.`);

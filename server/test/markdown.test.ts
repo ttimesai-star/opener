@@ -21,6 +21,7 @@ test("opener brief exports every section with a candidates table", async () => {
   }
   assert.equal(out.split("\n").filter((l) => /^\| [1-5] \|/.test(l)).length, 5);
   assert.ok(out.includes("synthetic demo (not Qloo)"));
+  assert.ok(out.includes("run by: scripted planner") && !/agent: (llm|planner|hybrid)/.test(out));
   assert.ok(out.includes("Permalink (expires): https://example.test/b/abc"));
 });
 

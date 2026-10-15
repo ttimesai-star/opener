@@ -11,6 +11,7 @@ export function Openers({ candidates, rankedCount, scoreSource }: { candidates: 
     : recommended ? "in this Qloo recommendation call" : "in this Qloo rank call";
   return (
     <>
+    <div className="table-wrap">
     <table className="openers">
       <thead>
         <tr>
@@ -38,6 +39,7 @@ export function Openers({ candidates, rankedCount, scoreSource }: { candidates: 
         ))}
       </tbody>
     </table>
+    </div>
     <p className="meta">Audience fit: 100 = strongest {base}, 0 = weakest. Relative within this brief, not a sales forecast.{recommended ? " The rank call failed, so scores come from the artist recommendation." : ""}</p>
     </>
   );

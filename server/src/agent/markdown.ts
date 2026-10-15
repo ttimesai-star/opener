@@ -2,7 +2,7 @@
 // value is escaped: a name must not be able to inject links, HTML or table cells.
 
 import { popularityLabel } from "./popularity.ts";
-import { withCity } from "./titles.ts";
+import { agentRunLabel, withCity } from "./titles.ts";
 import type { Brief } from "./types.ts";
 
 /** Escapes Markdown/HTML control characters and flattens whitespace. */
@@ -27,7 +27,7 @@ export function briefToMarkdown(brief: Brief, permalink?: string): string {
   const venue = brief.input.scenario === "venue";
   const L: string[] = [];
   L.push(`# ${md(titleOf(brief))}`, "");
-  const meta = [`Generated ${brief.generatedAt.slice(0, 16).replace("T", " ")} UTC`, `data: ${brief.mode === "mock" ? "synthetic demo (not Qloo)" : "Qloo Insights API"}`, `agent: ${brief.agent}`];
+  const meta = [`Generated ${brief.generatedAt.slice(0, 16).replace("T", " ")} UTC`, `data: ${brief.mode === "mock" ? "synthetic demo (not Qloo)" : "Qloo Insights API"}`, `run by: ${agentRunLabel(brief.agent)}`];
   if (brief.input.capacity) meta.push(`capacity: ${brief.input.capacity}`);
   L.push(`_${meta.join(" · ")}_`, ""); // fixed text and validated numbers only
   if (permalink) L.push(`Permalink (expires): ${permalink}`, "");

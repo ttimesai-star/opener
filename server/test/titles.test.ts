@@ -15,3 +15,10 @@ test("venue title does not repeat the city when Qloo's name carries it (demo 14.
   const brief = { input: { scenario: "venue", venue: "Mohawk", city: "Austin", date: "2026-11-14" }, subject: { name: "Mohawk Austin" } } as unknown as Brief;
   assert.equal(titleOf(brief), "Booking brief: Mohawk Austin, 2026-11-14");
 });
+
+test("the brief says who ran it in words, not 'agent: hybrid' (demo 15.10)", async () => {
+  const { agentRunLabel } = await import("../src/agent/titles.ts");
+  assert.equal(agentRunLabel("hybrid"), "LLM agent + scripted planner");
+  assert.equal(agentRunLabel("llm"), "LLM agent");
+  assert.equal(agentRunLabel("planner"), "scripted planner");
+});

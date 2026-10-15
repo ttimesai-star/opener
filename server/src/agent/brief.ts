@@ -149,7 +149,8 @@ export function buildBrief(args: {
   } satisfies Omit<Brief, "narrative" | "caveats">;
   const shown = new Set(pool.map((e) => e.entityId ?? e.name));
   const relationNotes = [...related.entries()].flatMap(([key, r]) => {
-    if (r.kind === "part-of") return [`Left out ${r.act}: Qloo describes it as part of ${subjectName} ("${r.quote}"). Members and side projects are not openers.`];
+    // "Qloo describes it as part of Radiohead" read wrong for a person (demo 15.10); this reads right for a person or a band.
+    if (r.kind === "part-of") return [`Left out ${r.act}, a member or side project of ${subjectName} according to Qloo's description ("${r.quote}"). Members and side projects are not openers.`];
     return shown.has(key) ? [`${r.act}'s Qloo description mentions ${subjectName} ("${r.quote}"); check it is not a member or side project before booking.`] : [];
   });
   if (headPop !== null && coHeadline.length > 0) {

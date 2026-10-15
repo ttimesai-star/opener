@@ -68,6 +68,9 @@ test("opener: the headliner's own singer is left out, with a caveat; a mere ment
   const rank = calls.find((c) => c.tool === "qloo_rank");
   assert.ok(!(rank?.args.options as string[]).includes("Lead Person"), "member sent to rank");
   assert.ok(brief.caveats.some((c) => c.startsWith("Left out Lead Person") && c.includes("lead vocalist of Test Headliner")), brief.caveats.join(" | "));
+  // Reads right for a person: no "Qloo describes it as part of" (demo 15.10).
+  assert.ok(brief.caveats.some((c) => c.startsWith("Left out Lead Person, a member or side project of Test Headliner according to Qloo's description (")), brief.caveats.join(" | "));
+  assert.ok(!brief.caveats.some((c) => c.includes("describes it as part of")));
   if (brief.candidates.some((c) => c.name === "Echo Band")) {
     assert.ok(brief.caveats.some((c) => c.startsWith("Echo Band's Qloo description mentions Test Headliner")), brief.caveats.join(" | "));
   }

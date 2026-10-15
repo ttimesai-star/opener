@@ -37,7 +37,12 @@ test("co-headline: as popular as the headliner, or within 10x on the 'top %' sca
 const ok = (operation: string, results: unknown[]): QlooEnvelope => ({ operation, status: "ok", results, result_count: results.length });
 
 /** Live-shaped Qloo: a very popular headliner, `big` co-headline acts and `small` smaller ones, all in the top 1%. */
-function liveShaped(big: number, small: number): { qloo: QlooClient; rankOptions: () => string[] } {
+/**
+ * insights: what the direct /v2/insights call (popularity_max) does. "ignore": returns the
+ * unfiltered list (a client that drops the filter); "honor": filters like live Qloo;
+ * "error": the call fails, so the agent falls back to the harness recommendation.
+ */
+function liveShaped(big: number, small: number, insights: "ignore" | "honor" | "error" = "ignore"): { qloo: QlooClient; rankOptions: () => string[] } {
   const mock = new MockQlooClient();
   const acts = [
     ...Array.from({ length: big }, (_, i) => ({ name: `Star ${i + 1}`, popularity: 0.99998 - i * 0.000001, affinity: 0.98 - i * 0.001 })),
@@ -52,7 +57,10 @@ function liveShaped(big: number, small: number): { qloo: QlooClient; rankOptions
       call: async (tool: QlooToolName, args: Record<string, unknown>) => {
         if (tool === "qloo_describe") return ok("describe", [{ entity_id: "HEAD-ID", name: "Big Headliner", popularity: 0.99999 }]);
         if (tool === "qloo_recommend" && args.target_type === "artist") {
-          return ok("recommend", acts.slice(0, Number(args.limit ?? 10)).map((a, i) => ({ entity_id: `ID-${i}`, name: a.name, popularity: a.popularity, affinity: a.affinity, properties: { short_description: "A fictional band." } })));
+          const max = args.popularity_max;
+          if (typeof max === "number" && insights === "error") return { operation: "recommend", status: "error", results: [], summary: "Qloo Insights answered HTTP 500." };
+          const pool = typeof max === "number" && insights === "honor" ? acts.filter((a) => a.popularity <= max) : acts;
+          return ok("recommend", pool.slice(0, Number(args.limit ?? 10)).map((a, i) => ({ entity_id: `ID-${i}`, name: a.name, popularity: a.popularity, affinity: a.affinity, properties: { short_description: "A fictional band." } })));
         }
         if (tool === "qloo_rank") {
           options = (args.options as string[]) ?? [];
@@ -65,7 +73,8 @@ function liveShaped(big: number, small: number): { qloo: QlooClient; rankOptions
 }
 
 test("opener: co-headline acts are left out, the 10 least popular smaller acts are ranked, the table tells them apart", async () => {
-  const { qloo, rankOptions } = liveShaped(3, 17);
+  // The direct popularity-ceiling call fails here, so this is the unfiltered harness pool (the behaviour before the ceiling).
+  const { qloo, rankOptions } = liveShaped(3, 17, "error");
   const brief = await runAgent({ input: INPUT, qloo, today: TODAY });
   const options = rankOptions();
   assert.equal(options.length, 10);

@@ -31,6 +31,8 @@ export interface EntityLike {
   popularity: number | null;
   /** properties.short_description and/or description, when the harness passed them. */
   description?: string;
+  /** properties.end_year: the act stopped (live 15.10: "On a Friday", Radiohead's name until 1991). */
+  endYear?: number;
 }
 
 export function readEntities(results: unknown): EntityLike[] {
@@ -46,6 +48,7 @@ export function readEntities(results: unknown): EntityLike[] {
       affinity: num(r.affinity) ?? num(query?.affinity),
       popularity: num(r.popularity),
       ...(text.length > 0 ? { description: [...new Set(text.map((t) => t.trim()))].join(" ") } : {}),
+      ...(num(props?.end_year) !== null ? { endYear: num(props?.end_year) as number } : {}),
     }];
   });
 }

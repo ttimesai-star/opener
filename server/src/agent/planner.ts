@@ -5,7 +5,7 @@
 
 import type { QlooToolName } from "../qloo/types.ts";
 import { readDemographics, readEntities, type EntityLike } from "./normalize.ts";
-import { isCoHeadline, MIN_SUPPORT_ACTS } from "./popularity.ts";
+import { isCoHeadline, MIN_SUPPORT_ACTS, popularityLabel, supportCeilings } from "./popularity.ts";
 import { headlinerRelations } from "./relations.ts";
 import { subjectOf, type BriefInput, type EvidenceItem } from "./types.ts";
 
@@ -127,6 +127,9 @@ export function headlinerPopularity(evidence: EvidenceItem[]): number | null {
   return readEntities(latestOfKind(evidence, "resolve")?.envelope.results)[0]?.popularity ?? null;
 }
 
+/** Qloo lists an end year: the act no longer performs (live 15.10: "On a Friday", Radiohead's name until 1991). */
+export const isInactive = (e: EntityLike): boolean => e.endYear !== undefined;
+
 /**
  * Opener scenario: acts that are not a support act for this headliner. Members
  * and side projects always; acts at co-headline popularity (Beck, Arcade Fire
@@ -134,8 +137,10 @@ export function headlinerPopularity(evidence: EvidenceItem[]): number | null {
  * smaller ones. Venues: undefined (no headliner).
  */
 export function notSupportAct(input: BriefInput, evidence: EvidenceItem[]): Exclude | undefined {
-  const partOf = partOfHeadliner(input, evidence);
-  if (!partOf) return undefined;
+  const related = partOfHeadliner(input, evidence);
+  // Venue: no headliner, but an act that has stopped cannot be booked either.
+  if (!related) return isInactive;
+  const partOf: Exclude = (e) => isInactive(e) || related(e);
   const head = headlinerPopularity(evidence);
   const recommended = readEntities(latestOfKind(evidence, "candidates")?.envelope.results).filter((e) => !same(e.name, input.scenario === "opener" ? input.headliner : "") && !partOf(e));
   const smaller = recommended.filter((e) => !isCoHeadline(e.popularity, head)).length;
@@ -144,16 +149,21 @@ export function notSupportAct(input: BriefInput, evidence: EvidenceItem[]): Excl
 }
 
 /**
- * The acts sent to qloo_rank. Opener: support acts only, least popular first,
- * so the ranked shortlist leans to acts that fit under the headliner (the
- * harness has no popularity filter on recommendations). Venue: recommendation order.
+ * The acts sent to qloo_rank. Opener: support acts only; from a pool under a
+ * popularity ceiling in Qloo's affinity order, from the unfiltered harness pool
+ * least popular first (so it leans to acts that fit under the headliner).
+ * Venue: recommendation order.
  */
 export function rankShortlist(input: BriefInput, evidence: EvidenceItem[], max = 10): string[] {
   const { name: s } = subjectOf(input);
-  if (input.scenario !== "opener") return candidateNames(evidence, s, max);
+  if (input.scenario !== "opener") return candidateNames(evidence, s, max, isInactive);
   const exclude = notSupportAct(input, evidence);
   const rec = latestOfKind(evidence, "candidates");
-  const acts = readEntities(rec?.envelope.results).filter((e) => !same(e.name, s) && !exclude?.(e));
+  const ceiling = typeof rec?.args.popularity_max === "number" ? rec.args.popularity_max : undefined;
+  const acts = readEntities(rec?.envelope.results).filter((e) => !same(e.name, s) && !exclude?.(e)
+    && (ceiling === undefined || e.popularity === null || e.popularity <= ceiling));
+  // Under a popularity ceiling every act is already support-sized: keep Qloo's affinity order.
+  if (ceiling !== undefined) return acts.slice(0, max).map((e) => e.name);
   const rank = (p: number | null) => (p === null ? Number.POSITIVE_INFINITY : p);
   return [...acts].sort((a, b) => rank(a.popularity) - rank(b.popularity)).slice(0, max).map((e) => e.name);
 }
@@ -214,10 +224,51 @@ export function repairLlmArgs(input: BriefInput, evidence: EvidenceItem[], tool:
     if (!Array.isArray(a.signals) || a.signals.length === 0) a.signals = [ref];
     if (!a.signal_location) a.signal_location = input.city;
   }
+  // Opener: the support-slot popularity ceiling is a booking rule too, not left to the model.
+  if (tool === "qloo_recommend" && a.target_type === "artist" && input.scenario === "opener") {
+    const ceiling = candidateCeilings(input, evidence)[0];
+    if (ceiling !== undefined) {
+      a.popularity_max = ceiling;
+      if (!Array.isArray(a.signals) || a.signals.length === 0 || a.signals.every((x) => typeof x === "string" && same(x, s))) a.signals = [ref];
+      if (!a.signal_location) a.signal_location = input.city;
+      if (a.limit === undefined) a.limit = 20;
+    } else delete a.popularity_max;
+  } else delete a.popularity_max;
   if (tool === "qloo_recommend" && (a.target_type === "place" || a.target_type === "brand")) {
     if (!Array.isArray(a.signals) || a.signals.length === 0) a.signals = [ref];
   }
   return a;
+}
+
+/** Opener: the popularity ceilings for the candidate pool, from the resolved headliner (empty: unfiltered). */
+export function candidateCeilings(input: BriefInput, evidence: EvidenceItem[]): number[] {
+  return input.scenario === "opener" ? supportCeilings(headlinerPopularity(evidence)) : [];
+}
+
+/** Acts in a candidate result that can open: not the headliner, not part of it, still active, under the ceiling. */
+export function usableSupportActs(input: BriefInput, evidence: EvidenceItem[], results: unknown, ceiling?: number): EntityLike[] {
+  const { name: s } = subjectOf(input);
+  const exclude = partOfHeadliner(input, evidence);
+  return readEntities(results).filter((e) => !same(e.name, s) && !isInactive(e) && !exclude?.(e)
+    // A client that ignored the filter must not slip stars back in.
+    && (ceiling === undefined || e.popularity === null || e.popularity <= ceiling));
+}
+
+/**
+ * The next candidate call after one that left too few support acts: the next
+ * wider ceiling, then (null) the unfiltered harness recommendation, as before
+ * the ceiling existed. undefined: nothing left to try. An error skips straight
+ * to the harness: the direct call itself failed, a wider ceiling would too.
+ */
+export function nextCeiling(input: BriefInput, evidence: EvidenceItem[], tried: number, status: string): number | null | undefined {
+  if (status === "error") return null;
+  const later = candidateCeilings(input, evidence).filter((c) => c > tried);
+  return later.length > 0 ? later[0] : null;
+}
+
+/** Purpose line for the agent log: what the ceiling means in "top %" terms. */
+export function ceilingPurpose(headliner: string, city: string, ceiling: number, widened = false): string {
+  return `${widened ? "Too few smaller acts; widening: " : "Smaller "}artists whose audiences overlap with ${headliner}'s, weighted to ${city}, outside Qloo's ${popularityLabel(ceiling)} by popularity (filter.popularity.max ${ceiling}; the harness has no such filter, so this call goes to /v2/insights)`;
 }
 
 export function nextPlannedStep(input: BriefInput, evidence: EvidenceItem[], today = new Date()): PlannedStep | null {
@@ -243,6 +294,15 @@ export function nextPlannedStep(input: BriefInput, evidence: EvidenceItem[], tod
     return { kind: "resolve", tool: "qloo_describe", args: { entity: qualified, type }, purpose: `"${s}" is ambiguous in Qloo; resolve it with the city` };
   }
   if (want("candidates")) {
+    // Opener: support acts only, below the headliner's popularity (the agent widens the ceiling if too few come back).
+    const ceiling = candidateCeilings(input, evidence)[0];
+    if (ceiling !== undefined) {
+      return {
+        kind: "candidates", tool: "qloo_recommend",
+        args: { target_type: "artist", signals: [ref], signal_location: city, limit: 20, popularity_max: ceiling },
+        purpose: ceilingPurpose(s, city, ceiling),
+      };
+    }
     return {
       kind: "candidates", tool: "qloo_recommend",
       // Opener: 20 (the harness maximum) so the popularity spread leaves room for support acts.

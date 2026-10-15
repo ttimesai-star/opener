@@ -117,6 +117,15 @@ export class MockQlooClient implements QlooClient {
             ...(target === "artist" ? { properties: { short_description: "Fictional act generated for the Opener demo." } } : {}),
           }))
           .sort((a, b) => b.affinity - a.affinity);
+        // Same contract as the live direct Insights call: filter.popularity.max.
+        const max = args.popularity_max;
+        if (typeof max === "number") {
+          const kept = results.filter((r) => r.popularity <= max);
+          return envelope("recommend", kept, {
+            summary: `[mock] recommend returned ${kept.length} synthetic result(s) with popularity at most ${max}.`,
+            provenance: { source: "opener-mock", endpoint: "mock /v2/insights", documentation: "server/src/qloo/mockClient.ts", requests: [{ method: "GET", path: "/v2/insights", query: { "filter.type": "urn:entity:artist", "filter.popularity.max": String(max) } }] },
+          });
+        }
         return envelope("recommend", results);
       }
       case "qloo_rank": {

@@ -40,12 +40,12 @@ browser ──POST /api/brief/stream (SSE)──▶ Node server ──▶ agent 
                            brief builder (numbers only from Qloo) + LLM narrative (prose only)
 ```
 
-Qloo tools used (all through the official harness MCP server):
+Qloo tools used (through the official harness MCP server, plus one direct Insights call the harness cannot make):
 
 | Brief section | Tool | Why |
 | --- | --- | --- |
 | Resolve headliner | `qloo_describe` | Pin the entity before anything depends on it |
-| Candidate pool | `qloo_recommend` (artist, `signal_location` = city) | Artists whose audiences overlap, weighted to the city |
+| Candidate pool | `GET /v2/insights` (artist, headliner id as signal, city, `filter.popularity.max`) | Smaller acts whose audiences overlap, weighted to the city. The harness's `qloo_recommend` rejects a popularity filter, so this one call goes to the Insights API directly; if it fails or returns too few acts, the ceiling is widened once, then the harness `qloo_recommend` is used as before |
 | Overlap score | `qloo_rank` | One call over the whole shortlist, so scores are comparable |
 | Trend | `qloo_trends` | 90-day popularity series for headliner + top candidates |
 | Fan map | `qloo_where_popular` | Heatmap of affinity inside the city |
@@ -151,7 +151,8 @@ CI (GitHub Actions) runs typecheck, unit/API tests, the web build, and a Docker 
 
 - Done 2026-10-13 on live payloads: fit scores spread across the rank call, tag-family filter, partner category filter, venue fallbacks (ambiguous name, no place demographics, brand signals).
 - Open: the candidate pool can include the headliner's own members or side projects (Radiohead -> Thom Yorke). Qloo has no "member of" field in these results; a promoter has to judge.
-- Done 2026-10-15: popularity is shown as "top x%" (live percentiles for a big headliner's neighbours are all above 0.998, so a 0-100 scale read 100 for everyone). Acts within 10x of the headliner's popularity are left out as co-headliners when at least five smaller acts remain, and the 10 least popular recommended acts are ranked. The harness has no popularity filter, so for a very popular headliner every suggestion is still a well-known act; the brief says so.
+- Done 2026-10-15: popularity is shown as "top x%" (live percentiles for a big headliner's neighbours are all above 0.998, so a 0-100 scale read 100 for everyone). Acts within 10x of the headliner's popularity are left out as co-headliners when at least five smaller acts remain.
+- Done 2026-10-15 (round 3): support-sized candidates. Qloo's Insights API documents `filter.popularity.min/max` for artists (docs.qloo.com, Parameters); the harness does not pass it. The candidate pool now asks `/v2/insights` for acts whose "top %" is 1000x the headliner's (at most the top 25%), widens to 100x (at most the top 10%) when fewer than five usable acts come back, then falls back to the unfiltered harness call. Live, Radiohead in Berlin: before, Beck, The Smashing Pumpkins, Interpol, Pixies, Franz Ferdinand (all in Qloo's top 0.05%); after, The Good, the Bad & the Queen, ...And You Will Know Us by the Trail of Dead, Spiritualized, Sean Lennon, The Notwist (top 0.4% to 1.6%). Acts Qloo lists with an end year are left out (the same query offered "On a Friday", Radiohead's own name until 1991). The venue scenario has no headliner to measure against and is unchanged.
 - Open: a public demo deployment (see Deploy).
 - Cross-domain show ideas from the same audience: films, podcasts and brands for theme nights, merch and pre-show playlists.
 - Ask the user to pick when Qloo returns `needs_input` for an ambiguous headliner, instead of only flagging it.

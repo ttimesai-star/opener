@@ -7,7 +7,8 @@ import { isQlooTool, type QlooClient, type QlooEnvelope, type QlooToolName } fro
 import { buildBrief, trendNote } from "./brief.ts";
 import { popularityLabel } from "./popularity.ts";
 import { envMs, timeoutSignal, type ChatMessage, type ChatResult, type Llm, type ToolSpec } from "./llm.ts";
-import { isoDaysAgo, kindOf, nextPlannedStep, repairLlmArgs, TREND_POINTS, TREND_QUERY_DAYS, withPartnerFilter } from "./planner.ts";
+import { ceilingPurpose, isoDaysAgo, kindOf, nextCeiling, nextPlannedStep, repairLlmArgs, TREND_POINTS, TREND_QUERY_DAYS, usableSupportActs, withPartnerFilter } from "./planner.ts";
+import { MIN_SUPPORT_ACTS } from "./popularity.ts";
 import { sanitizeSecrets } from "./redact.ts";
 import { TOOL_SPECS } from "./toolSpecs.ts";
 import type { AgentEvent, Brief, BriefInput, EvidenceItem, LlmCall, TraceStep } from "./types.ts";
@@ -205,6 +206,29 @@ export async function runAgent(opts: RunOptions): Promise<Brief> {
     return envelope;
   };
 
+  /**
+   * The opener candidate pool with a popularity ceiling. Too few support acts
+   * under it: widen to the next ceiling, then fall back to the unfiltered harness
+   * recommendation. Each step is its own call in the log. Same for LLM and planner.
+   */
+  const executeCandidates = async (actor: TraceStep["actor"], args: Record<string, unknown>, purpose?: string): Promise<QlooEnvelope> => {
+    let envelope = await execute(actor, "qloo_recommend", args, purpose);
+    let current = args;
+    const { headliner, city } = input.scenario === "opener" ? input : { headliner: "", city: input.city };
+    while (input.scenario === "opener" && typeof current.popularity_max === "number" && trace.length < maxToolCalls) {
+      const ceiling = current.popularity_max;
+      if (envelope.status !== "error" && usableSupportActs(input, evidence, envelope.results, ceiling).length >= MIN_SUPPORT_ACTS) break;
+      const next = nextCeiling(input, evidence, ceiling, envelope.status);
+      if (next === undefined) break;
+      const { popularity_max: _dropped, ...rest } = current;
+      current = next === null ? rest : { ...rest, popularity_max: next };
+      envelope = await execute("planner", "qloo_recommend", current, next === null
+        ? `Too few acts below the popularity ceiling; Qloo's unfiltered artist recommendation for ${headliner}, weighted to ${city}`
+        : ceilingPurpose(headliner, city, next, true));
+    }
+    return envelope;
+  };
+
   // One timed LLM round trip, recorded and streamed like a Qloo call.
   const askLlm = async (llm: Llm, phase: LlmCall["phase"], messages: ChatMessage[], tools?: ToolSpec[], signal?: AbortSignal): Promise<ChatResult> => {
     const id = ++seq;
@@ -285,7 +309,9 @@ export async function runAgent(opts: RunOptions): Promise<Brief> {
               kindsThisTurn.add(kind);
               llmKindCount.set(kind, (llmKindCount.get(kind) ?? 0) + 1);
               llmUsed = true;
-              const envelope = await execute("llm", name, args);
+              const envelope = kind === "candidates" && typeof args.popularity_max === "number"
+                ? await executeCandidates("llm", args)
+                : await execute("llm", name, args);
               llmResults.set(key, envelope);
               llmKindStatus.set(kind, envelope.status);
               content = compact(envelope);
@@ -307,7 +333,8 @@ export async function runAgent(opts: RunOptions): Promise<Brief> {
 
   for (let step = nextPlannedStep(input, evidence, today); step && trace.length < maxToolCalls; step = nextPlannedStep(input, evidence, today)) {
     plannerUsed = true;
-    await execute("planner", step.tool, step.args, step.purpose);
+    if (step.kind === "candidates" && typeof step.args.popularity_max === "number") await executeCandidates("planner", step.args, step.purpose);
+    else await execute("planner", step.tool, step.args, step.purpose);
   }
 
   const agent: Brief["agent"] = llmUsed && plannerUsed ? "hybrid" : llmUsed ? "llm" : "planner";

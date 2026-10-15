@@ -5,6 +5,7 @@
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { recommendWithPopularityCeiling } from "./insights.ts";
 import type { QlooClient, QlooEnvelope, QlooToolName } from "./types.ts";
 
 const INSTALL_HINT = "Cannot start `qloo`. Install it with: npm install --global @qloo/qloo-harness@0.1.26";
@@ -28,6 +29,7 @@ export interface McpClientOptions {
   args?: string[];
   timeoutMs?: number;
   env?: NodeJS.ProcessEnv; // environment for the harness; default process.env
+  fetchImpl?: typeof fetch; // direct Insights call (popularity ceiling); injectable for tests
 }
 
 export class McpQlooClient implements QlooClient {
@@ -38,12 +40,14 @@ export class McpQlooClient implements QlooClient {
   private readonly args: string[];
   private readonly timeoutMs: number;
   private readonly env: NodeJS.ProcessEnv;
+  private readonly fetchImpl?: typeof fetch;
 
   constructor(opts: McpClientOptions = {}) {
     this.env = opts.env ?? process.env;
     this.command = opts.command ?? this.env.QLOO_BIN ?? (process.platform === "win32" ? "qloo.cmd" : "qloo");
     this.args = opts.args ?? ["mcp"];
     this.timeoutMs = opts.timeoutMs ?? 45_000;
+    this.fetchImpl = opts.fetchImpl;
   }
 
   /** Environment the harness child process starts with. */
@@ -92,6 +96,11 @@ export class McpQlooClient implements QlooClient {
   }
 
   async call(tool: QlooToolName, args: Record<string, unknown>): Promise<QlooEnvelope> {
+    // The harness has no popularity filter (its schema rejects extra fields); this one call goes to /v2/insights directly.
+    if (tool === "qloo_recommend" && args.popularity_max !== undefined) {
+      const env = this.spawnEnv();
+      return recommendWithPopularityCeiling(args, { baseUrl: env.QLOO_BASE_URL ?? QLOO_HACKATHON_BASE_URL, apiKey: env.QLOO_API_KEY ?? "", timeoutMs: this.timeoutMs, fetchImpl: this.fetchImpl });
+    }
     const client = await this.connect();
     const result = await client.callTool({ name: tool, arguments: args }, undefined, { timeout: this.timeoutMs });
     const raw = (result.structuredContent ?? {}) as Partial<QlooEnvelope>;

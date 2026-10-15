@@ -13,3 +13,13 @@ export function withCity(name: string, city: string): string {
   const inName = new RegExp(`(?<![\\p{L}\\p{N}])${escape(c)}(?![\\p{L}\\p{N}])`, "iu").test(name);
   return inName ? name : `${name}, ${c}`;
 }
+
+/**
+ * Who ran the Qloo calls of a brief, in words: the meta line read "agent: hybrid"
+ * (demo 2026-10-15), which a promoter cannot decode.
+ */
+export function agentRunLabel(agent: "llm" | "planner" | "hybrid"): string {
+  if (agent === "hybrid") return "LLM agent + scripted planner";
+  if (agent === "llm") return "LLM agent";
+  return "scripted planner";
+}
